@@ -84,7 +84,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             "display_name": "Personal Assistant User",
             "email": None
         }
-    except jwt.PyJWTError:
+    except (jwt.PyJWTError, jwt.InvalidTokenError, jwt.ExpiredSignatureError, Exception):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",

@@ -104,15 +104,26 @@ def _load_routes():
     except Exception as e:
         print(f"⚠️ WARNING: Ingestion router not loaded: {e}")
 
-# Load routes on startup (but after app initialization)
-try:
-    print("🚀 Starting route loading...")
-    _load_routes()
-    print("✅ Route loading completed")
-except Exception as e:
-    print(f"❌ CRITICAL ERROR during route loading: {e}")
-    import traceback
-    print(f"❌ Traceback: {traceback.format_exc()}")
+# Load routes lazily - only when first request comes in
+# This prevents crashes during import time
+routes_loaded = False
+
+@app.middleware("http")
+async def load_routes_middleware(request, call_next):
+    """Middleware to load routes on first request"""
+    global routes_loaded
+    if not routes_loaded:
+        try:
+            print("🚀 Loading routes on first request...")
+            _load_routes()
+            routes_loaded = True
+            print("✅ Routes loaded successfully")
+        except Exception as e:
+            print(f"❌ ERROR loading routes: {e}")
+            import traceback
+            print(f"❌ Traceback: {traceback.format_exc()}")
+            # Don't crash - just log the error
+    return await call_next(request)
 
 # Add root route to handle 404 errors
 @app.get("/")
