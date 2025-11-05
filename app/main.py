@@ -3,93 +3,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 import asyncio
 
-# Import routes with error handling
-ROUTES_AVAILABLE = True
-AUTH_AVAILABLE = True
+# Lazy import routes - only import when needed to reduce cold start time
+# Initialize FastAPI app first (minimal startup)
+app = FastAPI()
 
-# Import individual routes with error handling
-chat = None
+# Route modules will be imported lazily in the router inclusion section
 transcribe = None
+simple_session_manager = None
+simple_chat = None
+simple_users = None
 auth = None
 dossier = None
+projects = None
 upload = None
-
-# Old chat router removed - using new simplified system
-
-try:
-    from app.api import transcribe
-    print("SUCCESS: Transcribe router imported")
-except Exception as e:
-    print(f"ERROR: Error importing transcribe router: {e}")
-    transcribe = None
-
-# Using simplified session and chat system
-
-try:
-    from app.api import simple_session_manager
-    print("SUCCESS: Simple session manager imported")
-except Exception as e:
-    print(f"ERROR: Error importing simple_session_manager: {e}")
-    simple_session_manager = None
-
-try:
-    from app.api import simple_chat
-    print("SUCCESS: Simple chat imported")
-except Exception as e:
-    print(f"ERROR: Error importing simple_chat: {e}")
-    simple_chat = None
-
-try:
-    from app.api import simple_users
-    print("SUCCESS: Simple users imported")
-except Exception as e:
-    print(f"ERROR: Error importing simple_users: {e}")
-    simple_users = None
-
-try:
-    from app.api import auth
-    print("SUCCESS: Auth router imported")
-except Exception as e:
-    print(f"ERROR: Error importing auth router: {e}")
-    auth = None
-
-try:
-    from app.api import dossier
-    print("SUCCESS: Dossier router imported")
-except Exception as e:
-    print(f"ERROR: Error importing dossier router: {e}")
-    dossier = None
-
-try:
-    from app.api import projects
-    print("SUCCESS: Projects router imported")
-except Exception as e:
-    print(f"ERROR: Error importing projects router: {e}")
-    projects = None
-
-try:
-    from app.api import upload
-    print("SUCCESS: Upload router imported")
-except Exception as e:
-    print(f"ERROR: Error importing upload router: {e}")
-    upload = None
-
-try:
-    from app.api import coach_tools
-    print("SUCCESS: Coach tools router imported")
-except Exception as e:
-    print(f"ERROR: Error importing coach_tools router: {e}")
-    coach_tools = None
-
-try:
-    from app.api import ingest
-    print("SUCCESS: Ingestion router imported")
-except Exception as e:
-    print(f"ERROR: Error importing ingest router: {e}")
-    ingest = None
-
-# Initialize FastAPI app
-app = FastAPI()
+coach_tools = None
+ingest = None
 
 # Add CORS middleware with comprehensive configuration for production
 # Allow all origins in development, but restrict in production
