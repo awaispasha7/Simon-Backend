@@ -178,7 +178,7 @@ if ingest:
 # Add root route to handle 404 errors
 @app.get("/")
 async def root():
-    return {"message": "Stories We Tell Backend API", "status": "running"}
+    return {"message": "Simon Chatbot Backend API", "status": "running"}
 
 # Add health check endpoint
 @app.get("/health")
@@ -254,51 +254,14 @@ async def favicon_png():
 async def startup():
     """
     This function runs when the FastAPI application starts.
+    Optimized for serverless: no background workers in serverless environments.
     """
     print("Starting up FastAPI application...")
     print("CORS middleware configured")
     print("Application ready to serve requests")
-
-    # Start periodic cleanup of expired anonymous sessions/users
-    try:
-        from app.api.simple_session_manager import SimpleSessionManager
-
-        async def periodic_cleanup():
-            while True:
-                try:
-                    # Database cleanup (anonymize/delete) - run every 30 minutes
-                    await SimpleSessionManager.cleanup_expired_anonymous_sessions()
-                except Exception as cleanup_error:
-                    print(f"WARNING: Cleanup error: {cleanup_error}")
-                
-                # Run cleanup every 30 minutes
-                await asyncio.sleep(1800)
-
-        asyncio.create_task(periodic_cleanup())
-        print("SUCCESS: Started periodic anonymous cleanup task")
-    except Exception as schedule_error:
-        print(f"WARNING: Failed to start cleanup scheduler: {schedule_error}")
-
-    # Start knowledge extraction worker
-    try:
-        from app.workers.knowledge_extractor import knowledge_extractor
-
-        async def knowledge_extraction_worker():
-            while True:
-                try:
-                    # Run knowledge extraction every 2 hours
-                    await knowledge_extractor.extract_knowledge_from_conversations(limit=5)
-                    print("SUCCESS: Knowledge extraction completed")
-                except Exception as extraction_error:
-                    print(f"WARNING: Knowledge extraction error: {extraction_error}")
-                
-                # Run every 2 hours (7200 seconds)
-                await asyncio.sleep(7200)
-
-        asyncio.create_task(knowledge_extraction_worker())
-        print("SUCCESS: Started knowledge extraction worker")
-    except Exception as worker_error:
-        print(f"WARNING: Failed to start knowledge extraction worker: {worker_error}")
+    # Note: Background workers disabled for serverless deployment
+    # Periodic cleanup and knowledge extraction should be handled via scheduled tasks
+    # or external cron jobs in production serverless environments
 
 @app.on_event("shutdown")
 async def shutdown():
