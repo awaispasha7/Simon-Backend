@@ -6,19 +6,23 @@ import sys
 import traceback
 
 try:
-    print("=" * 50)
-    print("🔧 Initializing FastAPI application for Vercel...")
-    print("=" * 50)
+    print("=" * 60)
+    print("🔧 Vercel: Initializing FastAPI application...")
+    print("=" * 60)
     
+    # Import app - this should never crash
     from app.main import app
     
     print("✅ FastAPI app imported successfully")
-    print("=" * 50)
+    print("=" * 60)
     
-    # Export the app for Vercel
+    # Export for Vercel
     handler = app
     
 except Exception as e:
-    print(f"❌ CRITICAL ERROR: Failed to import app: {e}")
-    print(f"❌ Traceback: {traceback.format_exc()}")
-    sys.exit(1)
+    # Log error but don't exit - let Vercel handle it
+    print(f"❌ CRITICAL ERROR importing app: {type(e).__name__}: {e}")
+    print(f"❌ Traceback:")
+    traceback.print_exc()
+    # Don't sys.exit - let it fail gracefully
+    raise
