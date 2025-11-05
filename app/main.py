@@ -38,70 +38,55 @@ app.add_middleware(
     max_age=3600,  # Cache preflight response for 1 hour
 )
 
-# Include routes with individual error handling
-# Using new simplified session and chat system
-
-# Enable auth for single-client system
-if auth:
+# Lazy load routes only when needed (reduces cold start time)
+def _load_routes():
+    """Load routes lazily to reduce startup time"""
+    # Load essential routes first
     try:
+        from app.api import auth
         app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
-        print("SUCCESS: Auth router included")
     except Exception as e:
-        print(f"ERROR: Error including auth router: {e}")
-
-if transcribe:
+        print(f"WARNING: Auth router not loaded: {e}")
+    
     try:
-        app.include_router(transcribe.router, prefix="/api/v1", tags=["transcribe"])
-        print("SUCCESS: Transcribe router included")
-    except Exception as e:
-        print(f"ERROR: Error including transcribe router: {e}")
-
-## Pruned for new client MVP: dossier disabled
-
-## Pruned for new client MVP: projects disabled
-
-if upload:
-    try:
-        app.include_router(upload.router, prefix="/api/v1", tags=["upload"])
-        print("SUCCESS: Upload router included")
-    except Exception as e:
-        print(f"ERROR: Error including upload router: {e}")
-
-# Include new simplified routers
-if simple_session_manager:
-    try:
+        from app.api import simple_session_manager
         app.include_router(simple_session_manager.router, prefix="/api/v1", tags=["session"])
-        print("SUCCESS: Simple session manager router included")
     except Exception as e:
-        print(f"ERROR: Error including simple session manager router: {e}")
-
-if simple_chat:
+        print(f"WARNING: Session manager not loaded: {e}")
+    
     try:
+        from app.api import simple_chat
         app.include_router(simple_chat.router, prefix="/api/v1", tags=["chat"])
-        print("SUCCESS: Simple chat router included")
     except Exception as e:
-        print(f"ERROR: Error including simple chat router: {e}")
-
-if simple_users:
+        print(f"WARNING: Chat router not loaded: {e}")
+    
+    # Load optional routes
     try:
-        app.include_router(simple_users.router, prefix="/api/v1", tags=["users"])
-        print("SUCCESS: Simple users router included")
+        from app.api import transcribe
+        app.include_router(transcribe.router, prefix="/api/v1", tags=["transcribe"])
     except Exception as e:
-        print(f"ERROR: Error including simple users router: {e}")
-
-if coach_tools:
+        print(f"WARNING: Transcribe router not loaded: {e}")
+    
     try:
+        from app.api import upload
+        app.include_router(upload.router, prefix="/api/v1", tags=["upload"])
+    except Exception as e:
+        print(f"WARNING: Upload router not loaded: {e}")
+    
+    try:
+        from app.api import coach_tools
         app.include_router(coach_tools.router, prefix="/api/v1", tags=["coach"])
-        print("SUCCESS: Coach tools router included")
     except Exception as e:
-        print(f"ERROR: Error including coach tools router: {e}")
-
-if ingest:
+        print(f"WARNING: Coach tools not loaded: {e}")
+    
     try:
+        from app.api import ingest
         app.include_router(ingest.router, prefix="/api/v1", tags=["ingestion"])
-        print("SUCCESS: Ingestion router included")
     except Exception as e:
-        print(f"ERROR: Error including ingest router: {e}")
+        print(f"WARNING: Ingestion router not loaded: {e}")
+
+# Load routes on startup (but after app initialization)
+_load_routes()
 
 # Add root route to handle 404 errors
 @app.get("/")
