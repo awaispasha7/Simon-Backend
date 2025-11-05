@@ -190,6 +190,8 @@ class DocumentProcessor:
     
     async def _extract_pdf_text(self, file_content: bytes) -> str:
         """Extract text from PDF file"""
+        if not HAS_PYPDF2:
+            return "PDF processing not available (PyPDF2 not installed)"
         try:
             pdf_reader = PyPDF2.PdfReader(BytesIO(file_content))
             text = ""

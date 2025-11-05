@@ -125,12 +125,18 @@ class EmbeddingService:
             Cosine similarity score (0-1)
         """
         try:
-            v1 = np.array(vec1)
-            v2 = np.array(vec2)
-            
-            dot_product = np.dot(v1, v2)
-            norm1 = np.linalg.norm(v1)
-            norm2 = np.linalg.norm(v2)
+            if not HAS_NUMPY:
+                # Fallback to manual cosine similarity calculation
+                dot_product = sum(a * b for a, b in zip(vec1, vec2))
+                norm1 = sum(a * a for a in vec1) ** 0.5
+                norm2 = sum(b * b for b in vec2) ** 0.5
+            else:
+                v1 = np.array(vec1)
+                v2 = np.array(vec2)
+                
+                dot_product = np.dot(v1, v2)
+                norm1 = np.linalg.norm(v1)
+                norm2 = np.linalg.norm(v2)
             
             if norm1 == 0 or norm2 == 0:
                 return 0.0
