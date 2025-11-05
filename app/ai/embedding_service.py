@@ -7,7 +7,14 @@ import os
 import asyncio
 from typing import List, Optional, Dict, Any
 from openai import AsyncOpenAI
-import numpy as np
+
+# Optional numpy import for serverless (large dependency)
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
+    np = None
 
 class EmbeddingService:
     """Service for generating and managing text embeddings"""

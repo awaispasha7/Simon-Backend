@@ -4,7 +4,13 @@ Handles email notifications when stories are captured
 """
 
 import os
-import resend
+# Optional resend import for serverless
+try:
+    import resend
+    HAS_RESEND = True
+except ImportError:
+    HAS_RESEND = False
+    resend = None
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 

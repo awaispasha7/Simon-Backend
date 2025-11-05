@@ -7,7 +7,13 @@ import os
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 from uuid import UUID, uuid4
-import PyPDF2
+# Optional PyPDF2 import for serverless (large dependency)
+try:
+    import PyPDF2
+    HAS_PYPDF2 = True
+except ImportError:
+    HAS_PYPDF2 = False
+    PyPDF2 = None
 import docx
 from io import BytesIO
 import re
