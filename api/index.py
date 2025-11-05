@@ -2,11 +2,23 @@
 Vercel Serverless Function Entry Point
 This file is used by Vercel to serve the FastAPI application
 """
-from app.main import app
+import sys
+import traceback
 
-# Vercel will use this 'app' variable as the WSGI application
-# This is the entry point for all serverless function invocations
-# Deployment trigger: 2025-01-21
-
-# Export the app for Vercel
-handler = app
+try:
+    print("=" * 50)
+    print("🔧 Initializing FastAPI application for Vercel...")
+    print("=" * 50)
+    
+    from app.main import app
+    
+    print("✅ FastAPI app imported successfully")
+    print("=" * 50)
+    
+    # Export the app for Vercel
+    handler = app
+    
+except Exception as e:
+    print(f"❌ CRITICAL ERROR: Failed to import app: {e}")
+    print(f"❌ Traceback: {traceback.format_exc()}")
+    sys.exit(1)
