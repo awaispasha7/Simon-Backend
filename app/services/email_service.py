@@ -24,7 +24,10 @@ class EmailService:
         self.from_email = os.getenv("FROM_EMAIL", "noreply@storieswetell.com")
         self.client_email = os.getenv("CLIENT_EMAIL", "client@storieswetell.com")
         
-        if self.api_key:
+        if not HAS_RESEND:
+            self.available = False
+            print("⚠️ Resend package not installed - email service disabled")
+        elif self.api_key:
             resend.api_key = self.api_key
             self.available = True
         else:
