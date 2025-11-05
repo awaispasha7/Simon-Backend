@@ -220,6 +220,8 @@ class DocumentProcessor:
     
     async def _extract_docx_text(self, file_content: bytes) -> str:
         """Extract text from DOCX file"""
+        if not HAS_DOCX:
+            return "DOCX processing not available (python-docx not installed)"
         try:
             doc = docx.Document(BytesIO(file_content))
             text = ""
