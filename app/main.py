@@ -1,48 +1,56 @@
 """
-Minimal FastAPI app - maximum error tolerance
+Ultra-minimal FastAPI app - guaranteed to start
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# Create app with minimal config
-app = FastAPI()
+# Create app
+app = FastAPI(title="Simon Chatbot")
 
-# Add CORS - wrapped in try/except
+# CORS - if it fails, continue anyway
 try:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 except:
-    pass  # Continue even if CORS fails
+    pass
 
-# Basic endpoint - NO imports, NO dependencies
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "Simon Chatbot API"}
+    return {"status": "ok", "message": "API running"}
 
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
 
-# Load other routes ONLY if import succeeds
-try:
-    from app.api import auth
-    app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
-except Exception as e:
-    print(f"Auth router skipped: {e}")
+# Try to load routes - but don't crash if they fail
+def load_routes():
+    try:
+        from app.api import auth
+        app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
+        print("✅ Auth loaded")
+    except Exception as e:
+        print(f"⚠️ Auth failed: {e}")
 
-try:
-    from app.api import simple_session_manager
-    app.include_router(simple_session_manager.router, prefix="/api/v1", tags=["session"])
-except Exception as e:
-    print(f"Session router skipped: {e}")
+    try:
+        from app.api import simple_session_manager
+        app.include_router(simple_session_manager.router, prefix="/api/v1", tags=["session"])
+        print("✅ Session loaded")
+    except Exception as e:
+        print(f"⚠️ Session failed: {e}")
 
-try:
-    from app.api import simple_chat
-    app.include_router(simple_chat.router, prefix="/api/v1", tags=["chat"])
-except Exception as e:
-    print(f"Chat router skipped: {e}")
+    try:
+        from app.api import simple_chat
+        app.include_router(simple_chat.router, prefix="/api/v1", tags=["chat"])
+        print("✅ Chat loaded")
+    except Exception as e:
+        print(f"⚠️ Chat failed: {e}")
+
+# Load routes on first request via middleware
+_loaded = False
+
+@app.middleware("http")
+async def lazy_load(request, call_next):
+    global _loaded
+    if not _loaded:
+        load_routes()
+        _loaded = True
+    return await call_next(request)

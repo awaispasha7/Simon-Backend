@@ -1,16 +1,35 @@
 """
-Vercel entry point - absolute minimal
+Vercel entry point
 """
+import traceback
+
+print("=" * 60)
+print("Starting Vercel function...")
+print("=" * 60)
+
 try:
+    print("Importing app.main...")
     from app.main import app
+    print("✅ Import successful")
     handler = app
 except Exception as e:
-    # Create minimal app if import fails
+    print(f"❌ Import failed: {type(e).__name__}: {e}")
+    traceback.print_exc()
+    
+    # Create fallback app
+    print("Creating fallback app...")
     from fastapi import FastAPI
-    app = FastAPI()
+    fallback_app = FastAPI()
     
-    @app.get("/")
+    @fallback_app.get("/")
     async def root():
-        return {"error": "Import failed", "message": str(e)}
+        return {"error": "Import failed", "details": str(e)}
     
-    handler = app
+    @fallback_app.get("/health")
+    async def health():
+        return {"status": "error", "message": "Main app failed to import"}
+    
+    handler = fallback_app
+    print("✅ Fallback app created")
+
+print("=" * 60)
