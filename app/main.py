@@ -74,8 +74,30 @@ except Exception as e:
     print(f"ERROR: Error importing upload router: {e}")
     upload = None
 
+try:
+    from app.api import coach_tools
+    print("SUCCESS: Coach tools router imported")
+except Exception as e:
+    print(f"ERROR: Error importing coach_tools router: {e}")
+    coach_tools = None
+
+try:
+    from app.api import ingest
+    print("SUCCESS: Ingestion router imported")
+except Exception as e:
+    print(f"ERROR: Error importing ingest router: {e}")
+    ingest = None
+
 # Initialize FastAPI app
 app = FastAPI()
+
+# Add CORS middleware with comprehensive configuration for production
+# Allow all origins in development, but restrict in production
+allowed_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://*.vercel.app",  # Allow all Vercel deployments
+]
 
 # Add CORS middleware with comprehensive configuration
 app.add_middleware(
@@ -91,33 +113,24 @@ app.add_middleware(
 # Include routes with individual error handling
 # Using new simplified session and chat system
 
+# Enable auth for single-client system
 if auth:
     try:
-        app.include_router(auth.router, prefix="/api/v1/auth", tags=["authentication"])
+        app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
         print("SUCCESS: Auth router included")
     except Exception as e:
         print(f"ERROR: Error including auth router: {e}")
 
 if transcribe:
     try:
-        app.include_router(transcribe.router)
+        app.include_router(transcribe.router, prefix="/api/v1", tags=["transcribe"])
         print("SUCCESS: Transcribe router included")
     except Exception as e:
         print(f"ERROR: Error including transcribe router: {e}")
 
-if dossier:
-    try:
-        app.include_router(dossier.router, prefix="/api/v1", tags=["dossier"])
-        print("SUCCESS: Dossier router included")
-    except Exception as e:
-        print(f"ERROR: Error including dossier router: {e}")
+## Pruned for new client MVP: dossier disabled
 
-if projects:
-    try:
-        app.include_router(projects.router, prefix="/api/v1", tags=["projects"])
-        print("SUCCESS: Projects router included")
-    except Exception as e:
-        print(f"ERROR: Error including projects router: {e}")
+## Pruned for new client MVP: projects disabled
 
 if upload:
     try:
@@ -147,6 +160,20 @@ if simple_users:
         print("SUCCESS: Simple users router included")
     except Exception as e:
         print(f"ERROR: Error including simple users router: {e}")
+
+if coach_tools:
+    try:
+        app.include_router(coach_tools.router, prefix="/api/v1", tags=["coach"])
+        print("SUCCESS: Coach tools router included")
+    except Exception as e:
+        print(f"ERROR: Error including coach tools router: {e}")
+
+if ingest:
+    try:
+        app.include_router(ingest.router, prefix="/api/v1", tags=["ingestion"])
+        print("SUCCESS: Ingestion router included")
+    except Exception as e:
+        print(f"ERROR: Error including ingest router: {e}")
 
 # Add root route to handle 404 errors
 @app.get("/")

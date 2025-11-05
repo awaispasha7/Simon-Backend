@@ -285,6 +285,11 @@ class DocumentProcessor:
     ):
         """Update asset record with processing status"""
         try:
+            # If Supabase is not available, just log the status
+            if not self.supabase:
+                print(f"⚠️ Supabase not configured - asset {asset_id} status: {status}, metadata: {metadata}")
+                return
+            
             update_data = {
                 "processing_status": status,
                 "processing_metadata": metadata,
@@ -326,8 +331,12 @@ class DocumentProcessor:
             List of relevant document chunks
         """
         try:
+            if not self.supabase:
+                print("⚠️ DocumentProcessor: Supabase not configured - cannot retrieve document context")
+                return []
+            
             print(f"🔍 DocumentProcessor: Searching for document chunks")
-            print(f"🔍 DocumentProcessor: user_id={user_id}, project_id={project_id}")
+            print(f"🔍 DocumentProcessor: user_id={user_id} (type: {type(user_id)}), project_id={project_id}")
             print(f"🔍 DocumentProcessor: match_count={match_count}, similarity_threshold={similarity_threshold}")
             
             # Debug: Check embedding format
@@ -354,6 +363,11 @@ class DocumentProcessor:
             except Exception as e:
                 print(f"🔍 DocumentProcessor: Test RPC error: {e}")
             
+            # Use lower threshold to ensure we find documents (0.1 instead of 0.7)
+            # Vector similarity can be lower even for relevant content
+            effective_threshold = min(similarity_threshold, 0.1)  # Cap at 0.1 for better retrieval
+            print(f"🔍 DocumentProcessor: Using effective similarity threshold: {effective_threshold}")
+            
             result = self.supabase.rpc(
                 'get_similar_document_chunks',
                 {
@@ -361,23 +375,28 @@ class DocumentProcessor:
                     'query_user_id': str(user_id),
                     'query_project_id': str(project_id) if project_id else None,
                     'match_count': match_count,
-                    'similarity_threshold': similarity_threshold
+                    'similarity_threshold': effective_threshold
                 }
             ).execute()
             
             print(f"🔍 DocumentProcessor: RPC result: {result}")
-            print(f"🔍 DocumentProcessor: Result data: {result.data}")
+            print(f"🔍 DocumentProcessor: Result data length: {len(result.data) if result.data else 0}")
+            if result.data:
+                print(f"🔍 DocumentProcessor: First chunk preview: {result.data[0].get('chunk_text', '')[:200] if result.data else 'None'}")
             
             if result.data:
                 print(f"📚 Found {len(result.data)} relevant document chunks")
                 # Debug: Check user isolation
                 for chunk in result.data:
                     chunk_user_id = chunk.get('user_id')
+                    similarity_score = chunk.get('similarity', 0)
+                    print(f"  - Chunk from user {chunk_user_id}, similarity: {similarity_score:.3f}")
                     if chunk_user_id != str(user_id):
                         print(f"🚨 SECURITY WARNING: Found document chunk from different user! Expected: {user_id}, Found: {chunk_user_id}")
                 return result.data
             else:
                 print("📚 No relevant document chunks found")
+                print(f"📚 Debug: user_id={user_id}, project_id={project_id}, threshold={effective_threshold}")
                 return []
                 
         except Exception as e:

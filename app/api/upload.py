@@ -98,6 +98,75 @@ async def upload_files(
             file_type = get_file_type(file.filename)
             
             print(f"📤 Uploading to Supabase Storage: {unique_filename}")
+
+            # If Supabase is not configured, still process documents for RAG (critical feature)
+            asset_id = str(uuid.uuid4())
+            
+            # Use single-user personal assistant IDs for RAG processing
+            rag_user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+            rag_project_id = uuid.UUID(x_project_id) if x_project_id else uuid.UUID("00000000-0000-0000-0000-000000000002")
+            
+            if not supabase:
+                print("⚠️ Supabase not configured - storing minimal metadata, but will still process for RAG")
+                
+                # For documents, extract text immediately so it can be used in chat
+                extracted_text = None
+                if file_type in ['document', 'script'] and file_extension in ['pdf', 'docx', 'doc', 'txt'] and DOCUMENT_PROCESSOR_AVAILABLE:
+                    print(f"📄 Extracting text from document immediately (no Supabase): {file.filename}")
+                    try:
+                        from app.ai.document_processor import document_processor
+                        extracted_text = await document_processor._extract_text(
+                            content,
+                            file.filename,
+                            file.content_type or 'application/pdf'
+                        )
+                        if extracted_text:
+                            print(f"✅ Extracted {len(extracted_text)} chars from {file.filename}")
+                        else:
+                            print(f"⚠️ No text extracted from {file.filename}")
+                    except Exception as extract_error:
+                        print(f"⚠️ Error extracting text: {extract_error}")
+                        import traceback
+                        print(traceback.format_exc())
+                
+                # Create placeholder asset record without DB
+                uploaded_file_data = {
+                    "name": file.filename,
+                    "size": len(content),
+                    "url": f"local://{asset_id}",  # Placeholder URL
+                    "type": file_type,
+                    "asset_id": asset_id
+                }
+                
+                # Include extracted text if available (for immediate use in chat)
+                if extracted_text:
+                    uploaded_file_data["extracted_text"] = extracted_text[:10000]  # Limit to 10k chars
+                    print(f"✅ Included extracted text in upload response for {file.filename}")
+                
+                uploaded_files.append(uploaded_file_data)
+                
+                # CRITICAL: Still process documents for RAG even without Supabase
+                if file_type in ['document', 'script'] and file_extension in ['pdf', 'docx', 'doc', 'txt'] and DOCUMENT_PROCESSOR_AVAILABLE:
+                    print(f"🔄 Processing document for RAG (no Supabase): {file.filename}")
+                    try:
+                        # Process document asynchronously for RAG ingestion
+                        asyncio.create_task(
+                            process_document_for_rag(
+                                asset_id=uuid.UUID(asset_id),
+                                user_id=rag_user_id,
+                                project_id=rag_project_id,
+                                file_content=content,
+                                filename=file.filename,
+                                content_type=file.content_type or 'application/octet-stream'
+                            )
+                        )
+                        print(f"✅ Document processing started for RAG: {file.filename}")
+                    except Exception as rag_error:
+                        print(f"⚠️ Failed to start RAG processing: {rag_error}")
+                        import traceback
+                        print(traceback.format_exc())
+                
+                continue  # Skip Supabase storage operations
             
             # Upload to Supabase Storage
             try:
@@ -165,33 +234,16 @@ async def upload_files(
                     print(f"🔗 Public URL (authenticated user): {public_url}")
                 
                 # Store metadata in assets table
-                # Use real session data if available, otherwise fall back to test IDs
+                # For single-user personal assistant, use fixed project ID (no dossier check needed)
                 if x_project_id:
                     project_id = x_project_id
-                    print(f"✅ Using real project ID: {project_id}")
-                    
-                    # CRITICAL: Don't auto-create projects - they must be created via /api/v1/projects
-                    # Check if project exists - if not, return an error
-                    try:
-                        project_check = supabase.table('dossier').select('project_id').eq('project_id', project_id).execute()
-                        if not project_check.data:
-                            print(f"❌ Project {project_id} not found in dossier")
-                            raise HTTPException(
-                                status_code=404,
-                                detail=f"Project not found. Please create the project first via /api/v1/projects"
-                            )
-                        print(f"✅ Project {project_id} verified")
-                    except HTTPException:
-                        raise  # Re-raise HTTP exceptions
-                    except Exception as e:
-                        print(f"⚠️ Error checking project: {e}")
-                        raise HTTPException(
-                            status_code=500,
-                            detail=f"Failed to verify project: {str(e)}"
-                        )
+                    print(f"✅ Using provided project ID: {project_id}")
                 else:
-                    project_id = "00000000-0000-0000-0000-000000000002"  # Test project ID
-                    print(f"⚠️ Using test project ID: {project_id}")
+                    project_id = "00000000-0000-0000-0000-000000000002"  # Default project ID for personal assistant
+                    print(f"✅ Using default project ID: {project_id}")
+                
+                # Note: Dossier/project validation removed for single-user personal assistant
+                # All documents are accessible across all projects for RAG retrieval
                 
                 # Use the actual user_id from the request, fallback to test ID if not provided
                 user_id = x_user_id or "00000000-0000-0000-0000-000000000001"
@@ -229,17 +281,22 @@ async def upload_files(
                 if file_type in ['document', 'script'] and file_extension in ['pdf', 'docx', 'doc', 'txt'] and DOCUMENT_PROCESSOR_AVAILABLE:
                     print(f"🔄 Processing document for RAG: {file.filename}")
                     
-                    # Process document asynchronously
+                    # Use single-user personal assistant IDs for RAG (consistent with chat)
+                    rag_user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+                    rag_project_id = uuid.UUID(project_id)
+                    
+                    # Process document asynchronously for RAG ingestion
                     asyncio.create_task(
                         process_document_for_rag(
                             asset_id=uuid.UUID(asset_id),
-                            user_id=uuid.UUID(user_id),
-                            project_id=uuid.UUID(project_id),
+                            user_id=rag_user_id,
+                            project_id=rag_project_id,
                             file_content=content,
                             filename=file.filename,
                             content_type=file.content_type or 'application/octet-stream'
                         )
                     )
+                    print(f"✅ Document processing started for RAG: {file.filename}")
                 
             except Exception as storage_error:
                 print(f"❌ Storage error: {str(storage_error)}")

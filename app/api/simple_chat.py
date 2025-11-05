@@ -118,15 +118,10 @@ async def chat(
         # Store user message embedding for RAG
         if rag_service and user_message_id:
             try:
-                if is_authenticated:
-                    # For authenticated users, use their actual user_id
-                    rag_user_id = UUID(user_id)
-                    print(f"📚 Using RAG user_id: {rag_user_id} (authenticated: {is_authenticated})")
-                else:
-                    # For anonymous users, use the special anonymous user ID
-                    # This allows RAG to work while maintaining session isolation
-                    rag_user_id = UUID("00000000-0000-0000-0000-000000000000")
-                    print(f"📚 Using anonymous user_id for RAG: {rag_user_id} (session: {session_id})")
+                # For single-user personal assistant, always use the fixed user_id for RAG
+                # This matches the user_id used when ingesting documents (00000000-0000-0000-0000-000000000001)
+                rag_user_id = UUID("00000000-0000-0000-0000-000000000001")
+                print(f"📚 Using RAG user_id: {rag_user_id} (single-user personal assistant)")
                 
                 await rag_service.embed_and_store_message(
                     message_id=UUID(user_message_id),
@@ -148,8 +143,10 @@ async def chat(
         image_data_list = []  # List of {"data": bytes, "mime_type": str, "filename": str}
         
         if chat_request.attached_files:
-            print(f"🖼️ [IMAGE] Processing {len(chat_request.attached_files)} attached files for direct model sending")
-            print(f"🖼️ [IMAGE] Attached files: {[{'name': f.get('name'), 'type': f.get('type'), 'url': f.get('url')[:50] + '...' if f.get('url') else None} for f in chat_request.attached_files]}")
+            print(f"📎 [FILES] Processing {len(chat_request.attached_files)} attached files")
+            print(f"📎 [FILES] Attached files details:")
+            for f in chat_request.attached_files:
+                print(f"  - Name: {f.get('name')}, Type: {f.get('type')}, URL: {f.get('url', 'NO URL')[:80]}, Asset ID: {f.get('asset_id', 'NO ASSET ID')}")
             
             import requests
             
@@ -157,8 +154,10 @@ async def chat(
                 file_type = attached_file.get("type", "unknown")
                 file_name = attached_file.get("name", "unknown")
                 file_url = attached_file.get("url", "")
+                asset_id = attached_file.get("asset_id", "")
                 
-                print(f"🖼️ [IMAGE] Processing file {idx + 1}/{len(chat_request.attached_files)}: {file_name} (type: {file_type})")
+                print(f"📎 [FILES] Processing file {idx + 1}/{len(chat_request.attached_files)}: {file_name}")
+                print(f"  Type: {file_type}, URL: {file_url[:100] if file_url else 'NO URL'}, Asset ID: {asset_id}")
                 
                 # Check if it's an image file
                 is_image = (
@@ -167,7 +166,61 @@ async def chat(
                     file_name.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp'))
                 )
                 
-                if is_image:
+                # Check if it's a PDF/document file (check this BEFORE image check for PDFs)
+                is_pdf = (
+                    file_type in ['document', 'script'] or
+                    file_name.lower().endswith(('.pdf', '.docx', '.doc', '.txt'))
+                )
+                
+                # Handle PDF/document files FIRST (before images)
+                if is_pdf:
+                    print(f"📄 [DOCUMENT] Detected document file: {file_name} (type: {file_type})")
+                    extracted_text = None
+                    
+                    # FIRST: Check if extracted_text is already in the attached_file (from upload endpoint)
+                    extracted_text_from_upload = attached_file.get("extracted_text")
+                    if extracted_text_from_upload:
+                        extracted_text = extracted_text_from_upload
+                        print(f"✅ [DOCUMENT] Using pre-extracted text from upload ({len(extracted_text)} chars)")
+                    
+                    # SECOND: If not available, try to download from URL
+                    if not extracted_text and file_url and not file_url.startswith("local://"):
+                        try:
+                            print(f"📄 [DOCUMENT] Attempting to download from URL: {file_url[:100]}...")
+                            response = requests.get(file_url, timeout=30)
+                            
+                            if response.status_code == 200:
+                                document_bytes = response.content
+                                print(f"📄 [DOCUMENT] Downloaded {len(document_bytes)} bytes")
+                                try:
+                                    # Extract text from document
+                                    from app.ai.document_processor import document_processor
+                                    extracted_text = await document_processor._extract_text(
+                                        document_bytes,
+                                        file_name,
+                                        file_type if file_type.startswith("application/") else "application/pdf"
+                                    )
+                                    print(f"✅ [DOCUMENT] Extracted {len(extracted_text) if extracted_text else 0} chars from downloaded file")
+                                except Exception as e:
+                                    print(f"❌ [DOCUMENT] Error extracting text: {e}")
+                                    import traceback
+                                    print(traceback.format_exc())
+                            else:
+                                print(f"⚠️ [DOCUMENT] Failed to download from URL (status {response.status_code})")
+                        except Exception as e:
+                            print(f"⚠️ [DOCUMENT] Error downloading from URL: {e}")
+                    
+                    # Add extracted text to prompt if we have it
+                    if extracted_text and extracted_text.strip():
+                        document_context_text = f"\n\n## CONTENT FROM UPLOADED DOCUMENT ({file_name}):\n{extracted_text[:5000]}\n"  # Limit to first 5000 chars
+                        chat_request.text = chat_request.text + document_context_text
+                        print(f"✅ [DOCUMENT] Added {len(extracted_text)} chars from {file_name} to prompt")
+                    else:
+                        print(f"⚠️ [DOCUMENT] No text available for {file_name}")
+                        document_note = f"\n\n## NOTE: User has attached a document file named '{file_name}'. Please acknowledge this and work with any information the user provides in their message."
+                        chat_request.text = chat_request.text + document_note
+                # Then handle images
+                elif is_image:
                     print(f"🖼️ [IMAGE] Detected image file: {file_name}")
                     print(f"🖼️ [IMAGE] Image URL: {file_url[:100]}...")
                     
@@ -206,7 +259,7 @@ async def chat(
                         print(f"❌ [IMAGE] Error downloading image {file_name}: {str(e)}")
                         print(f"❌ [IMAGE] Traceback: {traceback.format_exc()}")
                 else:
-                    print(f"⏭️ [IMAGE] Skipping non-image file: {file_name} (type: {file_type})")
+                    print(f"⏭️ [FILES] Skipping unsupported file: {file_name} (type: {file_type})")
             
             print(f"🖼️ [IMAGE] Prepared {len(image_data_list)} image(s) for direct model sending")
         else:
@@ -280,21 +333,17 @@ async def chat(
                     rag_context = None
                     if rag_service:
                         try:
-                            if is_authenticated:
-                                # For authenticated users, use their actual user_id
-                                rag_user_id = UUID(user_id)
-                                print(f"🔍 Getting RAG context for user: {rag_user_id}, project: {project_id} (project-level isolation)")
-                            else:
-                                # For anonymous users, use the special anonymous user ID
-                                rag_user_id = UUID("00000000-0000-0000-0000-000000000000")
-                                print(f"🔍 Getting RAG context for anonymous user: {rag_user_id}, project: {project_id} (project-level isolation)")
+                            # For single-user personal assistant, always use the fixed user_id for RAG
+                            # This ensures we search across all ingested documents (290 chunks from 26 PDFs)
+                            rag_user_id = UUID("00000000-0000-0000-0000-000000000001")
+                            print(f"🔍 Getting RAG context for user: {rag_user_id} (searching across all projects)")
                             
-                            # Pass project_id to limit search to current project only
-                            # This ensures each story/project is isolated and independent
+                            # For personal assistant, search across ALL projects to maximize context
+                            # All ingested documents should be available for any query
                             rag_context = await rag_service.get_rag_context(
                                 user_message=chat_request.text,
                                 user_id=rag_user_id,
-                                project_id=UUID(project_id) if project_id else None,  # Limit to current project
+                                project_id=None,  # Search across all projects for personal assistant
                                 conversation_history=conversation_history
                             )
                             print(f"📚 RAG context retrieved: {rag_context.get('user_context_count', 0)} user messages, {rag_context.get('document_context_count', 0)} document chunks")
@@ -332,8 +381,36 @@ async def chat(
                         image_data=image_data_list  # Images sent directly (ChatGPT-style)
                     )
                     
-                    # Get the response content
+                    # Get the response content and clean markdown formatting
                     full_response = ai_response.get("response", "I'm sorry, I couldn't generate a response.")
+                    
+                    # Clean markdown formatting: remove asterisks, bold symbols, etc.
+                    import re
+                    # Remove bold markdown (**text** or __text__)
+                    full_response = re.sub(r'\*\*(.*?)\*\*', r'\1', full_response)
+                    full_response = re.sub(r'__(.*?)__', r'\1', full_response)
+                    # Remove italic markdown (*text* or _text_)
+                    full_response = re.sub(r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)', r'\1', full_response)
+                    full_response = re.sub(r'(?<!_)_(?!_)(.*?)(?<!_)_(?!_)', r'\1', full_response)
+                    # Remove code blocks (```code```)
+                    full_response = re.sub(r'```[\w]*\n?(.*?)```', r'\1', full_response, flags=re.DOTALL)
+                    # Remove inline code (`code`)
+                    full_response = re.sub(r'`([^`]+)`', r'\1', full_response)
+                    # Clean up multiple spaces
+                    full_response = re.sub(r'  +', ' ', full_response)
+                    # Clean up multiple newlines
+                    full_response = re.sub(r'\n\n\n+', '\n\n', full_response)
+                    
+                    # Send session metadata first (so frontend can store it)
+                    metadata_chunk = {
+                        "type": "metadata",
+                        "metadata": {
+                            "session_id": str(session_id),
+                            "project_id": str(project_id) if project_id else None,
+                            "user_id": str(user_id)
+                        }
+                    }
+                    yield f"data: {json.dumps(metadata_chunk)}\n\n"
                     
                     # Stream the response word by word for better UX
                     words = full_response.split()
@@ -474,6 +551,21 @@ async def chat(
                 else:
                     # Fallback response if AI is not available
                     fallback_response = "Woops! Something went wrong. Please try again later."
+                    # Clean markdown from fallback too
+                    import re
+                    fallback_response = re.sub(r'\*\*(.*?)\*\*', r'\1', fallback_response)
+                    fallback_response = re.sub(r'__(.*?)__', r'\1', fallback_response)
+                    
+                    # Send session metadata first (so frontend can store it)
+                    metadata_chunk = {
+                        "type": "metadata",
+                        "metadata": {
+                            "session_id": str(session_id),
+                            "project_id": str(project_id) if project_id else None,
+                            "user_id": str(user_id)
+                        }
+                    }
+                    yield f"data: {json.dumps(metadata_chunk)}\n\n"
                     
                     # Stream fallback response
                     words = fallback_response.split()
@@ -685,39 +777,49 @@ async def _save_message(
 ) -> str:
     """Save a message to the database"""
     supabase = get_supabase_client()
-    
+
     message_id = str(uuid4())
+    if not supabase:
+        # No-op storage for MVP without DB
+        return message_id
+
+    # Store user_id in metadata since chat_messages table doesn't have user_id column
+    message_metadata = metadata or {}
+    message_metadata["user_id"] = user_id
+    
     message_data = {
         "message_id": message_id,
         "session_id": session_id,
         "role": role,
         "content": content,
-        "metadata": metadata or {},
+        "metadata": message_metadata,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "user_id": user_id
+        "updated_at": datetime.now(timezone.utc).isoformat()
     }
-    
+
     supabase.table("chat_messages").insert(message_data).execute()
     return message_id
 
 async def _get_conversation_history(session_id: str, user_id: str, limit: int = 20) -> List[Dict]:
     """Get conversation history for context"""
     supabase = get_supabase_client()
-    
-    # Get more messages for better context and ensure user isolation
-    result = supabase.table("chat_messages")\
-        .select("*")\
-        .eq("session_id", session_id)\
-        .eq("user_id", user_id)\
-        .order("created_at", desc=False)\
-        .limit(limit)\
+    if not supabase:
+        return []
+
+    # Note: chat_messages table doesn't have user_id column - it's linked via session_id
+    # session_id already belongs to a specific user, so no need to filter by user_id
+    result = (
+        supabase.table("chat_messages")
+        .select("*")
+        .eq("session_id", session_id)
+        .order("created_at", desc=False)
+        .limit(limit)
         .execute()
-    
+    )
+
     if not result.data:
         return []
-    
-    # Convert to conversation format
+
     conversation = []
     for message in result.data:
         conversation.append({
@@ -726,14 +828,16 @@ async def _get_conversation_history(session_id: str, user_id: str, limit: int = 
             "timestamp": message["created_at"],
             "attached_files": message.get("metadata", {}).get("attached_files", [])
         })
-    
+
     print(f"📚 Retrieved {len(conversation)} messages from conversation history for session {session_id}")
     return conversation
 
 async def _update_session_activity(session_id: str):
     """Update session last message time"""
     supabase = get_supabase_client()
-    
+    if not supabase:
+        return
+
     supabase.table("sessions").update({
         "last_message_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat()

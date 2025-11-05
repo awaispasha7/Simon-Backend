@@ -16,8 +16,12 @@ router = APIRouter()
 # Session timeout for anonymous users (24 hours)
 ANONYMOUS_SESSION_TIMEOUT = 24 * 60 * 60  # 24 hours in seconds
 
+# Single user ID for personal assistant (simplified for single-user use)
+SINGLE_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
+SINGLE_PROJECT_ID = UUID("00000000-0000-0000-0000-000000000002")
+
 class SimpleSessionManager:
-    """Simplified session manager - one system for all users"""
+    """Simplified session manager - optimized for single-user personal assistant"""
     
     @staticmethod
     async def get_or_create_session(
@@ -26,29 +30,86 @@ class SimpleSessionManager:
         project_id: Optional[UUID] = None
     ) -> Dict[str, Any]:
         """
-        Get or create a session. Works for both authenticated and anonymous users.
+        Get or create a session. Simplified for single-user personal assistant.
         
-        Flow:
-        1. If user_id provided (authenticated) -> use that user
-        2. If session_id provided -> check if session exists and is valid
-        3. If no session_id -> create new anonymous session with temporary user
+        Flow (simplified):
+        1. Always use SINGLE_USER_ID for personal assistant
+        2. Use SINGLE_PROJECT_ID if no project_id provided
+        3. Get existing session or create new one
         """
         supabase = get_supabase_client()
         
-        # Case 1: Authenticated user
-        if user_id:
-            return await SimpleSessionManager._handle_authenticated_user(
-                user_id, session_id, project_id
-            )
+        # Always use single user ID for personal assistant
+        effective_user_id = SINGLE_USER_ID
+        effective_project_id = project_id or SINGLE_PROJECT_ID
         
-        # Case 2: Anonymous user with existing session
+        if not supabase:
+            # DB disabled: create ephemeral session with fixed user ID
+            new_session_id = str(uuid4())
+            return {
+                "session_id": new_session_id,
+                "user_id": str(effective_user_id),
+                "project_id": str(effective_project_id),
+                "is_authenticated": True,
+                "user": {
+                    "user_id": str(effective_user_id),
+                    "email": "assistant@personal.local",
+                    "display_name": "Personal Assistant",
+                    "avatar_url": None,
+                },
+            }
+        
+        # Ensure user exists (create if needed)
+        user_result = supabase.table("users").select("*").eq("user_id", str(effective_user_id)).execute()
+        if not user_result.data:
+            user_data = {
+                "user_id": str(effective_user_id),
+                "email": "assistant@personal.local",
+                "display_name": "Personal Assistant",
+                "avatar_url": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+            supabase.table("users").insert(user_data).execute()
+            user = user_data
+        else:
+            user = user_result.data[0]
+        
+        # Get or create session
         if session_id:
-            return await SimpleSessionManager._handle_existing_anonymous_session(
-                session_id, project_id
-            )
+            session_result = supabase.table("sessions").select("*").eq("session_id", session_id).eq("user_id", str(effective_user_id)).execute()
+            if session_result.data:
+                session = session_result.data[0]
+                return {
+                    "session_id": session["session_id"],
+                    "user_id": str(effective_user_id),
+                    "project_id": str(session["project_id"]) if session["project_id"] else str(effective_project_id),
+                    "is_authenticated": True,
+                    "user": user
+                }
         
-        # Case 3: New anonymous user - create everything
-        return await SimpleSessionManager._create_new_anonymous_session(project_id)
+        # Create new session
+        new_session_id = str(uuid4())
+        session_data = {
+            "session_id": new_session_id,
+            "user_id": str(effective_user_id),
+            "project_id": str(effective_project_id),
+            "title": "New Chat",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "last_message_at": datetime.now(timezone.utc).isoformat(),
+            "is_active": True
+        }
+        
+        supabase.table("sessions").insert(session_data).execute()
+        
+        return {
+            "session_id": new_session_id,
+            "user_id": str(effective_user_id),
+            "project_id": str(effective_project_id),
+            "is_authenticated": True,
+            "user": user
+        }
     
     @staticmethod
     async def _handle_authenticated_user(
@@ -58,6 +119,9 @@ class SimpleSessionManager:
     ) -> Dict[str, Any]:
         """Handle authenticated user session"""
         supabase = get_supabase_client()
+        if not supabase:
+            # Auth path not supported without DB in MVP
+            raise HTTPException(status_code=400, detail="Authenticated sessions require database in MVP")
         
         # Verify user exists
         user_result = supabase.table("users").select("*").eq("user_id", str(user_id)).execute()
@@ -137,6 +201,9 @@ class SimpleSessionManager:
     ) -> Dict[str, Any]:
         """Handle existing anonymous session"""
         supabase = get_supabase_client()
+        if not supabase:
+            # No DB: treat as missing session and create new ephemeral
+            return await SimpleSessionManager._create_new_anonymous_session(project_id)
         
         # Check if session exists
         session_result = supabase.table("sessions").select("*").eq("session_id", session_id).execute()
@@ -197,6 +264,23 @@ class SimpleSessionManager:
     async def _create_new_anonymous_session(project_id: Optional[UUID]) -> Dict[str, Any]:
         """Create new anonymous session with temporary user"""
         supabase = get_supabase_client()
+        if not supabase:
+            # Ephemeral create without DB
+            session_id = str(uuid4())
+            temp_user_id = str(uuid4())
+            new_project_id = str(project_id) if project_id else str(uuid4())
+            return {
+                "session_id": session_id,
+                "user_id": str(temp_user_id),
+                "project_id": str(new_project_id),
+                "is_authenticated": False,
+                "user": {
+                    "user_id": str(temp_user_id),
+                    "email": f"anonymous_{temp_user_id}@temp.local",
+                    "display_name": f"Anonymous User {str(temp_user_id)[:8]}",
+                    "avatar_url": None,
+                },
+            }
         
         # Create temporary user
         temp_user_id = str(uuid4())
@@ -266,6 +350,8 @@ class SimpleSessionManager:
     ) -> Dict[str, Any]:
         """Migrate anonymous user's sessions to authenticated user"""
         supabase = get_supabase_client()
+        if not supabase:
+            return {"cleaned": 0}
         
         # Get all sessions for anonymous user
         sessions_result = supabase.table("sessions").select("*").eq("user_id", anonymous_user_id).execute()
@@ -312,6 +398,8 @@ class SimpleSessionManager:
     async def cleanup_expired_anonymous_sessions():
         """Clean up expired anonymous sessions and users"""
         supabase = get_supabase_client()
+        if not supabase:
+            return {"success": True, "sessions": []}
         cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=ANONYMOUS_SESSION_TIMEOUT)
         
         # Get expired anonymous users
@@ -325,8 +413,9 @@ class SimpleSessionManager:
             user_id = user["user_id"]
             
             try:
-                # Anonymize chat messages (set user_id to NULL)
-                supabase.table("chat_messages").update({"user_id": None}).eq("user_id", user_id).execute()
+                # Note: chat_messages table doesn't have user_id column - it's linked via session_id
+                # Messages are automatically deleted when sessions are deleted (CASCADE)
+                # No need to anonymize chat_messages separately
                 
                 # Anonymize turns (set user_id to NULL)
                 supabase.table("turns").update({"user_id": None}).eq("user_id", user_id).execute()
@@ -360,6 +449,8 @@ class SimpleSessionManager:
         This method only exists for backward compatibility with anonymous users.
         """
         supabase = get_supabase_client()
+        if not supabase:
+            raise HTTPException(status_code=404, detail="Session not found")
         
         # Check if dossier already exists
         dossier_result = supabase.table("dossier").select("*").eq("project_id", str(project_id)).execute()
@@ -395,13 +486,9 @@ async def get_or_create_session(
 ):
     """Get or create a session - works for both authenticated and anonymous users"""
     try:
-        parsed_user_id = None
-        if user_id:
-            try:
-                parsed_user_id = UUID(user_id)
-            except (ValueError, TypeError) as e:
-                print(f"Invalid user_id format: {user_id} - {e}")
-                raise HTTPException(status_code=400, detail=f"Invalid user_id format: {user_id}")
+        # For single-client system, always use SINGLE_USER_ID regardless of header
+        # This ensures consistency and prevents UUID format errors
+        parsed_user_id = SINGLE_USER_ID
         
         parsed_project_id = None
         if project_id:
@@ -470,27 +557,33 @@ async def get_user_sessions(
     limit: int = 10,
     user_id: Optional[str] = Header(None, alias="X-User-ID")
 ):
-    """Get user sessions"""
+    """Get user sessions - simplified for single-user personal assistant"""
     try:
-        print(f"🔍 Sessions API called - user_id: {user_id}")
-        print(f"🔍 Sessions API called - limit: {limit}")
+        print(f"🔍 Sessions API called - user_id: {user_id}, limit: {limit}")
         
-        if not user_id:
-            print("❌ No user_id provided to sessions API")
-            return {"success": True, "sessions": []}
+        # For single-user personal assistant, use fixed user ID
+        effective_user_id = str(SINGLE_USER_ID)
+        print(f"🔍 Using single user ID for personal assistant: {effective_user_id}")
         
         supabase = get_supabase_client()
-        result = supabase.table("sessions").select("*").eq("user_id", user_id).order("updated_at", desc=True).limit(limit).execute()
+        if not supabase:
+            print("⚠️ No Supabase - returning empty sessions")
+            return {"success": True, "sessions": []}
         
-        print(f"🔍 Found {len(result.data or [])} sessions for user {user_id}")
+        result = supabase.table("sessions").select("*").eq("user_id", effective_user_id).order("last_message_at", desc=True).limit(limit).execute()
+        
+        print(f"🔍 Found {len(result.data or [])} sessions for user {effective_user_id}")
         
         return {
             "success": True,
             "sessions": result.data or []
         }
     except Exception as e:
-        print(f"Error getting user sessions: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"❌ Error getting user sessions: {e}")
+        import traceback
+        print(traceback.format_exc())
+        # Don't throw error - return empty list to prevent UI crashes
+        return {"success": True, "sessions": []}
 
 @router.get("/sessions/{session_id}/messages")
 async def get_session_messages(
@@ -502,6 +595,8 @@ async def get_session_messages(
     try:
         print(f"🔍 Session messages API called - session_id: {session_id}, user_id: {user_id}")
         supabase = get_supabase_client()
+        if not supabase:
+            return {"success": True, "message": "No sessions to delete", "deleted_count": 0}
         
         # Verify session exists and user has access
         session_result = supabase.table("sessions").select("*").eq("session_id", session_id).execute()

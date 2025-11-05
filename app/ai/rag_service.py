@@ -108,15 +108,34 @@ class RAGService:
             except Exception as e:
                 print(f"🔍 RAG Debug: Error checking embeddings: {e}")
             
-            # Step 4: Retrieve document context (search across all projects for user)
-            print(f"🔍 RAG: Calling get_document_context with user_id: {user_id} (type: {type(user_id)})")
-            document_context = await document_processor.get_document_context(
-                query_embedding=query_embedding,
-                user_id=user_id,
-                project_id=None,  # Search across all projects for this user
-                match_count=self.document_match_count,
-                similarity_threshold=self.similarity_threshold
-            )
+            # Step 4: Retrieve document context
+            # For personal assistant: search across all projects to maximize context
+            # For multi-user: can limit by project_id if provided
+            print(f"🔍 RAG: Calling get_document_context")
+            print(f"🔍 RAG: user_id={user_id} (type: {type(user_id)}, str: {str(user_id)})")
+            print(f"🔍 RAG: project_id={project_id} (type: {type(project_id)})")
+            print(f"🔍 RAG: query_embedding length={len(query_embedding) if query_embedding else 'None'}")
+            
+            # Use very low threshold (0.1) to ensure we find documents
+            # Vector similarity scores can be lower than expected even for relevant content
+            try:
+                document_context = await document_processor.get_document_context(
+                    query_embedding=query_embedding,
+                    user_id=user_id,
+                    project_id=project_id,  # None = search all projects, specific ID = limit to that project
+                    match_count=10,  # Increase match count to get more results
+                    similarity_threshold=0.1  # Low threshold to ensure retrieval
+                )
+                print(f"✅ RAG: Retrieved {len(document_context)} document chunks")
+                if document_context:
+                    print(f"✅ RAG: First chunk preview: {document_context[0].get('chunk_text', '')[:200]}")
+                else:
+                    print(f"⚠️ RAG: No document chunks retrieved - this might indicate an issue")
+            except Exception as doc_error:
+                print(f"❌ RAG: Error retrieving document context: {doc_error}")
+                import traceback
+                print(traceback.format_exc())
+                document_context = []
             
             # Step 5: Build combined context text for LLM prompt
             combined_context_text = self._format_rag_context(user_context, global_context, document_context)
@@ -182,12 +201,14 @@ class RAGService:
         # Add document context
         if document_context:
             context_parts.append("## Relevant Information from Your Uploaded Documents:")
+            context_parts.append("IMPORTANT: Use the information below from uploaded documents to answer user questions. Reference specific details when available.")
             for i, item in enumerate(document_context, 1):
                 doc_type = item.get('document_type', 'unknown')
                 chunk_text = item.get('chunk_text', '')
                 similarity = item.get('similarity', 0)
+                # Include more of the chunk text for better context (up to 500 chars)
                 context_parts.append(
-                    f"{i}. [{doc_type.upper()}] (relevance: {similarity:.2f}) {chunk_text[:200]}..."
+                    f"{i}. [{doc_type.upper()}] (relevance: {similarity:.2f})\n{chunk_text[:500]}"
                 )
             context_parts.append("")
         

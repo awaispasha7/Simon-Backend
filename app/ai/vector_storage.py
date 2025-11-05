@@ -290,6 +290,14 @@ class VectorStorageService:
             ID of the created embedding record
         """
         try:
+            # If Supabase is not available, generate embedding ID but warn that storage is disabled
+            if not self.supabase:
+                embedding_id = uuid4()
+                print(f"⚠️ Supabase not configured - embedding generated for asset {asset_id}, chunk {chunk_index} but not stored")
+                print(f"⚠️ RAG retrieval will not work until Supabase is configured with vector storage tables")
+                print(f"✅ Embedding ID generated: {embedding_id}")
+                return embedding_id
+            
             embedding_data = {
                 "embedding_id": str(uuid4()),
                 "asset_id": str(asset_id),

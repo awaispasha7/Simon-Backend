@@ -1,19 +1,21 @@
 """
-Authentication API endpoints for user login, signup, and OAuth integration.
+Simple Authentication API for single-client personal AI assistant.
+Uses hardcoded credentials from environment variables.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from typing import Optional
 import jwt
-import hashlib
-import secrets
 from datetime import datetime, timedelta
 import os
+from dotenv import load_dotenv
 
-from ..database.session_service_supabase import SessionService
-from ..models import User, UserCreate
+# Load environment variables from .env file
+load_dotenv()
+
+# Removed unused imports for single-client system
 
 router = APIRouter()
 security = HTTPBearer()
@@ -21,46 +23,23 @@ security = HTTPBearer()
 # JWT Configuration
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 30 * 24 * 60  # 30 days for personal assistant
+
+# Single client credentials from environment variables
+CLIENT_USERNAME = os.getenv("CLIENT_USERNAME", "admin")
+CLIENT_PASSWORD = os.getenv("CLIENT_PASSWORD", "admin123")
+
+# Debug: Print loaded credentials (remove in production)
+print(f"🔐 Auth loaded - CLIENT_USERNAME: {CLIENT_USERNAME}, CLIENT_PASSWORD: {'*' * len(CLIENT_PASSWORD) if CLIENT_PASSWORD else 'NOT SET'}")
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    username: str
     password: str
-
-class SignupRequest(BaseModel):
-    email: EmailStr
-    display_name: str
-    password: str
-
-class GoogleAuthRequest(BaseModel):
-    token: str
-    email: str
-    name: str
-    picture: Optional[str] = None
 
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str
-    user: User
-
-class PasswordHash:
-    """Simple password hashing utility"""
-    
-    @staticmethod
-    def hash_password(password: str) -> str:
-        """Hash a password using SHA-256 with salt"""
-        salt = secrets.token_hex(16)
-        password_hash = hashlib.sha256((password + salt).encode()).hexdigest()
-        return f"{salt}:{password_hash}"
-    
-    @staticmethod
-    def verify_password(password: str, hashed_password: str) -> bool:
-        """Verify a password against its hash"""
-        try:
-            salt, password_hash = hashed_password.split(':')
-            return hashlib.sha256((password + salt).encode()).hexdigest() == password_hash
-        except ValueError:
-            return False
+    user: dict  # Simple user dict for single client
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create a JWT access token"""
@@ -74,142 +53,86 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> User:
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     """Get the current authenticated user from JWT token"""
     try:
         payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("sub")
+        username: str = payload.get("username", CLIENT_USERNAME)
+        
         if user_id is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Could not validate credentials",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        
+        # Ensure user_id is a valid UUID (use SINGLE_USER_ID if not)
+        from .simple_session_manager import SINGLE_USER_ID
+        try:
+            # Validate it's a UUID
+            UUID(user_id)
+        except (ValueError, TypeError):
+            # If not a valid UUID, use the single user ID
+            user_id = str(SINGLE_USER_ID)
+        
+        # Return simple user dict for single client
+        return {
+            "user_id": user_id,
+            "username": username,
+            "display_name": "Personal Assistant User",
+            "email": None
+        }
     except jwt.PyJWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    # Get user from database
-    session_service = SessionService()
-    user = await session_service.get_user_by_id(user_id)
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    return user
 
 @router.post("/login", response_model=TokenResponse)
 async def login(request: LoginRequest):
-    """Authenticate user with email and password"""
-    session_service = SessionService()
+    """Authenticate single client with username and password"""
+    # Debug logging (remove in production)
+    print(f"🔐 Login attempt - Username: {request.username}, Password provided: {'Yes' if request.password else 'No'}")
+    print(f"🔐 Expected - Username: {CLIENT_USERNAME}, Password set: {'Yes' if CLIENT_PASSWORD else 'No'}")
     
-    # Get user by email
-    user = await session_service.get_user_by_email(request.email)
-    if not user:
+    # Verify credentials against environment variables
+    if request.username != CLIENT_USERNAME or request.password != CLIENT_PASSWORD:
+        print(f"❌ Login failed - Username match: {request.username == CLIENT_USERNAME}, Password match: {request.password == CLIENT_PASSWORD}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password"
+            detail="Invalid username or password"
         )
     
-    # Verify password (you'll need to store hashed passwords in your database)
-    # For now, we'll create a simple check
-    if not PasswordHash.verify_password(request.password, user.password_hash or ""):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password"
-        )
+    # Use the same UUID as session manager for consistency
+    from .simple_session_manager import SINGLE_USER_ID
+    user_id_str = str(SINGLE_USER_ID)
     
-    # Create access token
+    # Create access token for single client
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user.user_id}, expires_delta=access_token_expires
+        data={"sub": user_id_str, "username": CLIENT_USERNAME}, 
+        expires_delta=access_token_expires
     )
+    
+    # Return simple user object for single client with proper UUID
+    user_data = {
+        "user_id": user_id_str,
+        "username": CLIENT_USERNAME,
+        "display_name": "Personal Assistant User",
+        "email": None
+    }
     
     return TokenResponse(
         access_token=access_token,
         token_type="bearer",
-        user=user
+        user=user_data
     )
 
-@router.post("/signup", response_model=TokenResponse)
-async def signup(request: SignupRequest):
-    """Register a new user with email and password"""
-    session_service = SessionService()
-    
-    # Check if user already exists
-    existing_user = await session_service.get_user_by_email(request.email)
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
-        )
-    
-    # Hash password
-    password_hash = PasswordHash.hash_password(request.password)
-    
-    # Create user
-    user_data = UserCreate(
-        email=request.email,
-        display_name=request.display_name,
-        password_hash=password_hash
-    )
-    
-    user = await session_service.create_user(user_data)
-    
-    # Create access token
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.user_id}, expires_delta=access_token_expires
-    )
-    
-    return TokenResponse(
-        access_token=access_token,
-        token_type="bearer",
-        user=user
-    )
 
-@router.post("/google", response_model=TokenResponse)
-async def google_auth(request: GoogleAuthRequest):
-    """Authenticate user with Google OAuth token"""
-    # In a real implementation, you would:
-    # 1. Verify the Google token with Google's API
-    # 2. Extract user information from the token
-    # 3. Create or find the user in your database
-    
-    session_service = SessionService()
-    
-    # Check if user exists
-    user = await session_service.get_user_by_email(request.email)
-    
-    if not user:
-        # Create new user
-        user_data = UserCreate(
-            email=request.email,
-            display_name=request.name,
-            avatar_url=request.picture
-        )
-        user = await session_service.create_user(user_data)
-    
-    # Create access token
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.user_id}, expires_delta=access_token_expires
-    )
-    
-    return TokenResponse(
-        access_token=access_token,
-        token_type="bearer",
-        user=user
-    )
-
-@router.get("/me", response_model=User)
-async def get_current_user_info(current_user: User = Depends(get_current_user)):
+@router.get("/me")
+async def get_current_user_info(current_user: dict = Depends(get_current_user)):
     """Get current user information"""
     return current_user
 
@@ -219,11 +142,12 @@ async def logout():
     return {"message": "Successfully logged out"}
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh_token(current_user: User = Depends(get_current_user)):
+async def refresh_token(current_user: dict = Depends(get_current_user)):
     """Refresh access token"""
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": current_user.user_id}, expires_delta=access_token_expires
+        data={"sub": current_user["user_id"], "username": current_user.get("username", CLIENT_USERNAME)}, 
+        expires_delta=access_token_expires
     )
     
     return TokenResponse(
