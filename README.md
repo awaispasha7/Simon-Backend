@@ -1,6 +1,6 @@
-# Backend - Stories We Tell API
+# Backend - Simon Chatbot API
 
-A FastAPI-based backend service for the Stories We Tell cinematic intake chatbot application.
+A FastAPI-based backend service for the Simon Chatbot personal AI assistant application.
 
 ## Features
 
@@ -291,5 +291,5 @@ The application logs connection status and errors to the console. Look for:
 
 ## License
 
-This project is part of the Stories We Tell application suite.
+This project is part of the Simon Chatbot application suite.
 
