@@ -14,7 +14,14 @@ try:
 except ImportError:
     HAS_PYPDF2 = False
     PyPDF2 = None
-import docx
+
+# Optional docx import for serverless (large dependency)
+try:
+    import docx
+    HAS_DOCX = True
+except ImportError:
+    HAS_DOCX = False
+    docx = None
 from io import BytesIO
 import re
 from .embedding_service import get_embedding_service
