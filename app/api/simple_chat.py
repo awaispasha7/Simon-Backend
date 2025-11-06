@@ -436,16 +436,22 @@ async def chat(
                     # Model will see images + conversation history + RAG context + document text in single call
                     enhanced_prompt = chat_request.text
                     
-                    # Check if document text was added to the prompt
-                    has_document_context = "## CONTENT FROM UPLOADED DOCUMENT" in enhanced_prompt or "## NOTE: User has attached a document" in enhanced_prompt
+                    # Check if document text was added to the prompt (check for both old and new formats)
+                    has_document_context = (
+                        "## IMPORTANT: USER HAS UPLOADED A DOCUMENT" in enhanced_prompt or
+                        "## CONTENT FROM UPLOADED DOCUMENT" in enhanced_prompt or
+                        "## NOTE: User has attached a document" in enhanced_prompt or
+                        "Document Content:" in enhanced_prompt
+                    )
                     
                     # Add guidance for document analysis if document is present
                     if has_document_context and not image_data_list:
+                        print(f"📄 [PROMPT] Document detected in prompt - adding analysis guidance")
                         # Document only - ensure AI analyzes it
                         if enhanced_prompt and not enhanced_prompt.strip().startswith("##"):
                             # User provided question - AI should answer based on document
                             enhanced_prompt = f"{enhanced_prompt}\n\n[Note: Please analyze the attached document content and provide a comprehensive answer based on the document's main points and key information.]"
-                        elif "## CONTENT FROM UPLOADED DOCUMENT" in enhanced_prompt:
+                        elif "## IMPORTANT: USER HAS UPLOADED A DOCUMENT" in enhanced_prompt or "## CONTENT FROM UPLOADED DOCUMENT" in enhanced_prompt:
                             # Document text is included - AI should analyze it
                             enhanced_prompt = f"{enhanced_prompt}\n\n[Note: Please provide a detailed analysis of the document content, summarizing the main points and key information.]"
                     
