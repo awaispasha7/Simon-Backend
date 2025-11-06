@@ -465,28 +465,45 @@ async def chat(
                             enhanced_prompt = "Please analyze the attached image(s) in detail and provide comprehensive information about all visual elements relevant to storytelling and story development."
                     
                     print(f"📝 [PROMPT] Enhanced prompt (length: {len(enhanced_prompt)} chars)")
+                    print(f"📝 [PROMPT] Prompt preview (first 500 chars): {enhanced_prompt[:500]}")
+                    print(f"📝 [PROMPT] Prompt preview (last 500 chars): {enhanced_prompt[-500:]}")
                     if has_document_context:
                         print(f"📄 [PROMPT] Document content included in prompt")
                     if image_data_list:
                         print(f"🖼️ [PROMPT] Images included in single model call with full context")
                     
+                    print(f"🤖 [AI] Calling AI manager with enhanced prompt...")
+                    print(f"🤖 [AI] Conversation history length: {len(conversation_history)} messages")
+                    print(f"🤖 [AI] RAG context: {bool(rag_context)}")
+                    print(f"🤖 [AI] Dossier context: {bool(dossier_context)}")
+                    print(f"🤖 [AI] Image data: {len(image_data_list)} images")
+                    
                     # Use AI manager for response generation with RAG and dossier context
                     # SINGLE CALL: Images + conversation history + RAG context all together
-                    ai_response = await ai_manager.generate_response(
-                        task_type=TaskType.CHAT,
-                        prompt=enhanced_prompt,
-                        conversation_history=conversation_history,  # Full conversation history
-                        user_id=user_id,
-                        project_id=project_id,
-                        rag_context=rag_context,  # RAG context from documents
-                        dossier_context=dossier_context,
-                        image_data=image_data_list  # Images sent directly (ChatGPT-style)
-                    )
+                    try:
+                        ai_response = await ai_manager.generate_response(
+                            task_type=TaskType.CHAT,
+                            prompt=enhanced_prompt,
+                            conversation_history=conversation_history,  # Full conversation history
+                            user_id=user_id,
+                            project_id=project_id,
+                            rag_context=rag_context,  # RAG context from documents
+                            dossier_context=dossier_context,
+                            image_data=image_data_list  # Images sent directly (ChatGPT-style)
+                        )
+                        print(f"🤖 [AI] AI manager returned response")
+                        print(f"🤖 [AI] Response keys: {list(ai_response.keys()) if isinstance(ai_response, dict) else 'Not a dict'}")
+                    except Exception as ai_error:
+                        print(f"❌ [AI] Error calling AI manager: {ai_error}")
+                        import traceback
+                        print(f"❌ [AI] Traceback: {traceback.format_exc()}")
+                        raise
                     
                     # Get the response content and clean markdown formatting
                     full_response = ai_response.get("response", "I'm sorry, I couldn't generate a response.")
                     
-                    print(f"[CHAT] AI response received: {len(full_response)} chars")
+                    print(f"✅ [CHAT] AI response received: {len(full_response)} chars")
+                    print(f"✅ [CHAT] Response preview (first 200 chars): {full_response[:200]}")
                     
                     # Ensure we have a response
                     if not full_response or not full_response.strip():
