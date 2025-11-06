@@ -413,6 +413,13 @@ async def chat(
                     # Get the response content and clean markdown formatting
                     full_response = ai_response.get("response", "I'm sorry, I couldn't generate a response.")
                     
+                    print(f"[CHAT] AI response received: {len(full_response)} chars")
+                    
+                    # Ensure we have a response
+                    if not full_response or not full_response.strip():
+                        full_response = "I'm sorry, I couldn't generate a response. Please try again."
+                        print("[CHAT] WARNING: Empty response from AI, using fallback")
+                    
                     # Clean markdown formatting: remove asterisks, bold symbols, etc.
                     # (re is imported at top of file)
                     # Remove bold markdown (**text** or __text__)
@@ -429,6 +436,8 @@ async def chat(
                     full_response = re.sub(r'  +', ' ', full_response)
                     # Clean up multiple newlines
                     full_response = re.sub(r'\n\n\n+', '\n\n', full_response)
+                    
+                    print(f"[CHAT] Response after cleaning: {len(full_response)} chars")
                     
                     # Send session metadata first (so frontend can store it)
                     metadata_chunk = {
@@ -448,32 +457,47 @@ async def chat(
                     sentence_chunks = []
                     for i in range(0, len(sentences) - 1, 2):
                         if i + 1 < len(sentences):
-                            sentence_chunks.append(sentences[i] + sentences[i + 1])
+                            combined = sentences[i] + sentences[i + 1]
+                            if combined.strip():  # Only add non-empty chunks
+                                sentence_chunks.append(combined)
                         else:
-                            sentence_chunks.append(sentences[i])
+                            if sentences[i].strip():  # Only add non-empty chunks
+                                sentence_chunks.append(sentences[i])
                     # Handle last sentence if odd number
-                    if len(sentences) % 2 == 1:
+                    if len(sentences) % 2 == 1 and sentences[-1].strip():
                         sentence_chunks.append(sentences[-1])
                     
                     # If no sentence breaks found, split by newlines or fallback to word chunks
                     if len(sentence_chunks) <= 1:
                         # Split by newlines first
-                        sentence_chunks = full_response.split('\n')
+                        sentence_chunks = [chunk for chunk in full_response.split('\n') if chunk.strip()]
                         if len(sentence_chunks) <= 1:
                             # Fallback: split into chunks of ~20 words
                             words = full_response.split()
-                            sentence_chunks = []
-                            chunk_size = 20
-                            for i in range(0, len(words), chunk_size):
-                                chunk = ' '.join(words[i:i + chunk_size])
-                                if i + chunk_size < len(words):
-                                    chunk += ' '
-                                sentence_chunks.append(chunk)
+                            if words:  # Only if we have words
+                                sentence_chunks = []
+                                chunk_size = 20
+                                for i in range(0, len(words), chunk_size):
+                                    chunk = ' '.join(words[i:i + chunk_size])
+                                    if i + chunk_size < len(words):
+                                        chunk += ' '
+                                    sentence_chunks.append(chunk)
+                            else:
+                                # Last resort: send the whole response as one chunk
+                                sentence_chunks = [full_response] if full_response.strip() else ["I'm sorry, I couldn't generate a response."]
+                    
+                    # Ensure we have at least one chunk
+                    if not sentence_chunks:
+                        sentence_chunks = [full_response] if full_response.strip() else ["I'm sorry, I couldn't generate a response."]
+                    
+                    print(f"[CHAT] Streaming {len(sentence_chunks)} chunks")
                     
                     chunk_count = 0
                     total_chunks = len(sentence_chunks)
                     
                     for i, chunk in enumerate(sentence_chunks):
+                        if not chunk.strip():  # Skip empty chunks
+                            continue
                         chunk_count += 1
                         chunk_data = {
                             "type": "content",
@@ -482,6 +506,7 @@ async def chat(
                             "done": i == total_chunks - 1
                         }
                         yield f"data: {json.dumps(chunk_data)}\n\n"
+                        print(f"[CHAT] Sent chunk {chunk_count}/{total_chunks}: {len(chunk)} chars")
                         # Minimal delay - only 0.01s for smooth streaming without timeout
                         if i < total_chunks - 1:  # No delay on last chunk
                             await asyncio.sleep(0.01)
@@ -609,11 +634,8 @@ async def chat(
                     
                 else:
                     # Fallback response if AI is not available
-                    fallback_response = "Woops! Something went wrong. Please try again later."
-                    # Clean markdown from fallback too
-                    import re
-                    fallback_response = re.sub(r'\*\*(.*?)\*\*', r'\1', fallback_response)
-                    fallback_response = re.sub(r'__(.*?)__', r'\1', fallback_response)
+                    print("[CHAT] WARNING: AI not available, using fallback response")
+                    fallback_response = "I'm sorry, I'm having trouble connecting to my AI backend right now. Please try again in a moment."
                     
                     # Send session metadata first (so frontend can store it)
                     metadata_chunk = {
@@ -626,17 +648,37 @@ async def chat(
                     }
                     yield f"data: {json.dumps(metadata_chunk)}\n\n"
                     
-                    # Stream fallback response
-                    words = fallback_response.split()
-                    for i, word in enumerate(words):
+                    # Stream fallback response in sentence chunks (same as success path)
+                    sentences = re.split(r'([.!?]\s+)', fallback_response)
+                    sentence_chunks = []
+                    for i in range(0, len(sentences) - 1, 2):
+                        if i + 1 < len(sentences):
+                            combined = sentences[i] + sentences[i + 1]
+                            if combined.strip():
+                                sentence_chunks.append(combined)
+                        else:
+                            if sentences[i].strip():
+                                sentence_chunks.append(sentences[i])
+                    if len(sentences) % 2 == 1 and sentences[-1].strip():
+                        sentence_chunks.append(sentences[-1])
+                    
+                    if not sentence_chunks:
+                        sentence_chunks = [fallback_response]
+                    
+                    print(f"[CHAT] Streaming fallback: {len(sentence_chunks)} chunks")
+                    
+                    for i, chunk in enumerate(sentence_chunks):
+                        if not chunk.strip():
+                            continue
                         chunk_data = {
                             "type": "content",
-                            "content": word + (" " if i < len(words) - 1 else ""),
+                            "content": chunk,
                             "chunk": i + 1,
-                            "done": i == len(words) - 1
+                            "done": i == len(sentence_chunks) - 1
                         }
                         yield f"data: {json.dumps(chunk_data)}\n\n"
-                        await asyncio.sleep(0.1)
+                        if i < len(sentence_chunks) - 1:
+                            await asyncio.sleep(0.01)
                     
                     # Save fallback response
                     fallback_message_id = await _save_message(
