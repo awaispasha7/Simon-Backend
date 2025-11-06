@@ -209,16 +209,36 @@ async def chat(
                                 try:
                                     # Extract text from document
                                     from app.ai.document_processor import document_processor
+                                    
+                                    # Check if document_processor is available
+                                    if document_processor is None:
+                                        print(f"❌ [DOCUMENT] document_processor not available")
+                                        raise Exception("Document processor not available")
+                                    
                                     extracted_text = await document_processor._extract_text(
                                         document_bytes,
                                         file_name,
                                         file_type if file_type.startswith("application/") else "application/pdf"
                                     )
-                                    print(f"✅ [DOCUMENT] Extracted {len(extracted_text) if extracted_text else 0} chars from downloaded file")
+                                    
+                                    # Check if extraction returned an error message (dependencies missing)
+                                    if extracted_text and ("not available" in extracted_text.lower() or "not installed" in extracted_text.lower()):
+                                        print(f"❌ [DOCUMENT] Dependencies missing: {extracted_text}")
+                                        extracted_text = None
+                                    elif extracted_text and extracted_text.strip():
+                                        print(f"✅ [DOCUMENT] Extracted {len(extracted_text)} chars from downloaded file")
+                                    else:
+                                        print(f"⚠️ [DOCUMENT] Extraction returned empty text")
+                                        extracted_text = None
+                                except ImportError as import_error:
+                                    print(f"❌ [DOCUMENT] Import error: {import_error}")
+                                    print(f"❌ [DOCUMENT] PyPDF2 or python-docx may not be installed")
+                                    extracted_text = None
                                 except Exception as e:
                                     print(f"❌ [DOCUMENT] Error extracting text: {e}")
                                     import traceback
                                     print(traceback.format_exc())
+                                    extracted_text = None
                             else:
                                 print(f"⚠️ [DOCUMENT] Failed to download from URL (status {response.status_code})")
                         except Exception as e:
