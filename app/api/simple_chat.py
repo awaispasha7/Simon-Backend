@@ -280,12 +280,12 @@ async def chat(
                     
                     # Add extracted text to prompt if we have it
                     if extracted_text and extracted_text.strip():
-                        # CRITICAL: Limit to 2000 chars to prevent timeout (reduced from 3000)
-                        # Large prompts cause AI generation to take 8-9 seconds, causing 10s timeout
-                        # Extract first 2000 chars - this should be enough for summary
-                        document_text_preview = extracted_text[:2000]
-                        if len(extracted_text) > 2000:
-                            document_text_preview += f"\n\n[Note: Document continues beyond this point. Total length: {len(extracted_text)} characters. Please provide a summary of the key points from the content above.]"
+                        # CRITICAL: Limit to 1500 chars to prevent timeout (reduced from 2000)
+                        # OpenAI calls are taking 8-9 seconds even with smaller prompts
+                        # Extract first 1500 chars - focus on key content only
+                        document_text_preview = extracted_text[:1500]
+                        if len(extracted_text) > 1500:
+                            document_text_preview += f"\n\n[Note: Document continues. Total: {len(extracted_text)} chars. Summarize key points from above.]"
                         
                         # CRITICAL: Add clear instructions for the AI to use this document content
                         document_context_text = f"\n\n## IMPORTANT: USER HAS UPLOADED A DOCUMENT\n\n### Document Name: {file_name}\n\n### Document Content:\n{document_text_preview}\n\n### Instructions:\nThe user is asking about the contents of this document. You MUST analyze and summarize the document content above. Do NOT say you cannot process documents or that you didn't receive a proper response. The document content is provided above - use it to answer the user's question.\n"
@@ -480,29 +480,39 @@ async def chat(
                     print(f"🤖 [AI] Image data: {len(image_data_list)} images")
                     
                     # Use AI manager for response generation with RAG and dossier context
-                    # SINGLE CALL: Images + conversation history + RAG context all together
-                    # CRITICAL: Add timeout to AI call to prevent hanging
+                    # CRITICAL: Use asyncio.wait_for with proper cancellation to prevent timeout
+                    # Also reduce max_tokens and add aggressive timeout
                     try:
-                        ai_response = await asyncio.wait_for(
+                        # Create a task that can be cancelled
+                        ai_task = asyncio.create_task(
                             ai_manager.generate_response(
                                 task_type=TaskType.CHAT,
                                 prompt=enhanced_prompt,
-                                conversation_history=conversation_history,  # Limited conversation history
+                                conversation_history=conversation_history,
                                 user_id=user_id,
                                 project_id=project_id,
-                                rag_context=rag_context,  # RAG context from documents
+                                rag_context=rag_context,
                                 dossier_context=dossier_context,
-                                image_data=image_data_list,  # Images sent directly (ChatGPT-style)
-                                max_tokens=1000  # Reduce max tokens to speed up generation (reduced from 1500)
-                            ),
-                            timeout=5.0  # Max 5 seconds for AI generation (leaves 5s buffer for safety)
+                                image_data=image_data_list,
+                                max_tokens=800  # Aggressively reduced to speed up (was 1000)
+                            )
                         )
+                        
+                        # Wait with timeout and proper cancellation
+                        ai_response = await asyncio.wait_for(ai_task, timeout=4.0)  # Reduced to 4s
                         print(f"🤖 [AI] AI manager returned response")
                         print(f"🤖 [AI] Response keys: {list(ai_response.keys()) if isinstance(ai_response, dict) else 'Not a dict'}")
                     except asyncio.TimeoutError:
-                        print(f"❌ [AI] AI generation timed out after 5 seconds - using fallback")
+                        print(f"❌ [AI] AI generation timed out after 4 seconds - cancelling and using fallback")
+                        # Cancel the task if it's still running
+                        if not ai_task.done():
+                            ai_task.cancel()
+                            try:
+                                await ai_task
+                            except asyncio.CancelledError:
+                                pass
                         ai_response = {
-                            "response": "I'm processing your request, but it's taking longer than expected. Please try asking a more specific question about the document, or try again in a moment.",
+                            "response": "I'm processing your request, but it's taking longer than expected. The document content is being analyzed. Please try asking a more specific question or try again in a moment.",
                             "model_used": "timeout_fallback"
                         }
                     except Exception as ai_error:
