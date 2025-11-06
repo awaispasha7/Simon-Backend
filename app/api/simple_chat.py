@@ -160,7 +160,8 @@ async def chat(
             print(f"📎 [FILES] Processing {len(chat_request.attached_files)} attached files")
             print(f"📎 [FILES] Attached files details:")
             for f in chat_request.attached_files:
-                print(f"  - Name: {f.get('name')}, Type: {f.get('type')}, URL: {f.get('url', 'NO URL')[:80]}, Asset ID: {f.get('asset_id', 'NO ASSET ID')}")
+                extracted_text = f.get('extracted_text')
+                print(f"  - Name: {f.get('name')}, Type: {f.get('type')}, URL: {f.get('url', 'NO URL')[:80]}, Asset ID: {f.get('asset_id', 'NO ASSET ID')}, Has extracted_text: {bool(extracted_text)}, Length: {len(extracted_text) if extracted_text else 0}")
             
             import requests
             
