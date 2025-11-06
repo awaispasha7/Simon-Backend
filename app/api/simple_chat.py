@@ -499,7 +499,7 @@ async def chat(
                         print(f"🤖 [AI] AI manager returned response")
                         print(f"🤖 [AI] Response keys: {list(ai_response.keys()) if isinstance(ai_response, dict) else 'Not a dict'}")
                     except asyncio.TimeoutError:
-                        print(f"❌ [AI] AI generation timed out after 7 seconds - using fallback")
+                        print(f"❌ [AI] AI generation timed out after 6 seconds - using fallback")
                         ai_response = {
                             "response": "I'm processing your request, but it's taking longer than expected. Please try asking a more specific question about the document, or try again in a moment.",
                             "model_used": "timeout_fallback"
