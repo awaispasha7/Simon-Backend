@@ -362,12 +362,12 @@ async def upload_files(
                 print(f"[UPLOAD] Added file with error to response (non-fatal)")
             
             except Exception as file_error:
-                print(f"[UPLOAD] Error processing file {file.filename}: {str(file_error)}")
+                print(f"[UPLOAD] Error processing file {file.filename if hasattr(file, 'filename') else 'unknown'}: {str(file_error)}")
                 import traceback
                 print(traceback.format_exc())
                 # Add error to response but don't fail entire upload
                 uploaded_files.append({
-                    "name": file.filename or "unknown",
+                    "name": file.filename if hasattr(file, 'filename') else "unknown",
                     "size": 0,
                     "url": None,
                     "type": "unknown",
