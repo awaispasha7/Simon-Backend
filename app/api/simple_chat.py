@@ -412,14 +412,15 @@ async def chat(
                     dossier_context = None
                     
                     # Get RAG context from uploaded documents (with timeout to avoid blocking)
+                    # With Vercel Pro, we have more time - use 5s timeout for RAG
                     # SKIP RAG if document is already in prompt - no need for it!
                     rag_context = None
                     if rag_service and not has_document_context:
                         try:
                             rag_user_id = UUID("00000000-0000-0000-0000-000000000001")
-                            print(f"[RAG] Getting RAG context (with 3s timeout)")
+                            print(f"[RAG] Getting RAG context (with 5s timeout - Vercel Pro)")
                             
-                            # Use 3 second timeout now that we have Vercel Pro (more time available)
+                            # Use 5 second timeout with Vercel Pro (more time available)
                             rag_context = await asyncio.wait_for(
                                 rag_service.get_rag_context(
                                     user_message=chat_request.text,
@@ -427,7 +428,7 @@ async def chat(
                                     project_id=None,
                                     conversation_history=conversation_history
                                 ),
-                                timeout=3.0
+                                timeout=5.0
                             )
                             print(f"[RAG] Context retrieved: {rag_context.get('user_context_count', 0)} messages, {rag_context.get('document_context_count', 0)} chunks")
                         except asyncio.TimeoutError:
@@ -499,20 +500,20 @@ async def chat(
                                 rag_context=rag_context,
                                 dossier_context=dossier_context,
                                 image_data=image_data_list,
-                                max_tokens=2000  # Restored to reasonable value for proper responses
+                                max_tokens=4000  # Increased for Vercel Pro - allows longer, more detailed responses
                             )
                         )
                         print(f"🤖 [AI] AI task created, waiting with timeout...")
                         
                         # Wait with timeout and proper cancellation
-                        # With Vercel Pro, we have more time - use 15s for docs, 12s for simple queries
-                        timeout_seconds = 15.0 if has_document_context else 12.0
-                        print(f"🤖 [AI] Waiting for AI response (timeout: {timeout_seconds}s)...")
+                        # With Vercel Pro, we have more time - use 20s for docs, 15s for simple queries
+                        timeout_seconds = 20.0 if has_document_context else 15.0  # 20s for docs, 15s for simple queries
+                        print(f"🤖 [AI] Waiting for AI response (timeout: {timeout_seconds}s - Vercel Pro)...")
                         ai_response = await asyncio.wait_for(ai_task, timeout=timeout_seconds)
                         print(f"🤖 [AI] AI manager returned response")
                         print(f"🤖 [AI] Response keys: {list(ai_response.keys()) if isinstance(ai_response, dict) else 'Not a dict'}")
                     except asyncio.TimeoutError:
-                        timeout_used = 15.0 if has_document_context else 12.0
+                        timeout_used = 20.0 if has_document_context else 15.0
                         print(f"❌ [AI] AI generation timed out after {timeout_used} seconds - cancelling and using fallback")
                         # Cancel the task if it's still running
                         if not ai_task.done():
