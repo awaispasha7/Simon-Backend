@@ -51,6 +51,18 @@ async def chat(
     5. Stream response back to user
     """
     
+    # CRITICAL: Log the raw request data immediately
+    print(f"🔵 [CHAT] Received chat request")
+    print(f"🔵 [CHAT] Text: {chat_request.text[:100]}...")
+    print(f"🔵 [CHAT] Has attached_files: {bool(chat_request.attached_files)}")
+    if chat_request.attached_files:
+        print(f"🔵 [CHAT] Number of attached files: {len(chat_request.attached_files)}")
+        for i, f in enumerate(chat_request.attached_files):
+            print(f"🔵 [CHAT] File {i+1} raw data: {list(f.keys())}")
+            print(f"🔵 [CHAT] File {i+1} extracted_text present: {'extracted_text' in f}")
+            if 'extracted_text' in f:
+                print(f"🔵 [CHAT] File {i+1} extracted_text length: {len(f.get('extracted_text', ''))}")
+    
     try:
         # Get or create session
         session_info = await SimpleSessionManager.get_or_create_session(
