@@ -407,14 +407,23 @@ async def chat(
                         except Exception as e:
                             print(f"[WARNING] Dossier retrieval error: {e}")
                     
+                    # Check if document text was already added to the prompt BEFORE RAG
+                    # If document is already in prompt, skip RAG to avoid timeout
+                    has_document_context = (
+                        "## IMPORTANT: USER HAS UPLOADED A DOCUMENT" in chat_request.text or
+                        "## CONTENT FROM UPLOADED DOCUMENT" in chat_request.text or
+                        "Document Content:" in chat_request.text
+                    )
+                    
                     # Get RAG context from uploaded documents (with timeout to avoid blocking)
+                    # SKIP RAG if document is already in prompt - no need for it!
                     rag_context = None
-                    if rag_service:
+                    if rag_service and not has_document_context:
                         try:
                             rag_user_id = UUID("00000000-0000-0000-0000-000000000001")
-                            print(f"[RAG] Getting RAG context (with 3s timeout)")
+                            print(f"[RAG] Getting RAG context (with 1s timeout)")
                             
-                            # Use timeout to prevent blocking - max 3 seconds
+                            # Use shorter timeout to prevent blocking - max 1 second
                             rag_context = await asyncio.wait_for(
                                 rag_service.get_rag_context(
                                     user_message=chat_request.text,
@@ -422,7 +431,7 @@ async def chat(
                                     project_id=None,
                                     conversation_history=conversation_history
                                 ),
-                                timeout=3.0
+                                timeout=1.0
                             )
                             print(f"[RAG] Context retrieved: {rag_context.get('user_context_count', 0)} messages, {rag_context.get('document_context_count', 0)} chunks")
                         except asyncio.TimeoutError:
@@ -431,18 +440,12 @@ async def chat(
                         except Exception as e:
                             print(f"[WARNING] RAG context error: {e}")
                             rag_context = None
+                    elif has_document_context:
+                        print(f"[RAG] Skipping RAG - document content already in prompt")
                     
                     # Enhance user prompt - include document context and image guidance
                     # Model will see images + conversation history + RAG context + document text in single call
                     enhanced_prompt = chat_request.text
-                    
-                    # Check if document text was added to the prompt (check for both old and new formats)
-                    has_document_context = (
-                        "## IMPORTANT: USER HAS UPLOADED A DOCUMENT" in enhanced_prompt or
-                        "## CONTENT FROM UPLOADED DOCUMENT" in enhanced_prompt or
-                        "## NOTE: User has attached a document" in enhanced_prompt or
-                        "Document Content:" in enhanced_prompt
-                    )
                     
                     # Add guidance for document analysis if document is present
                     if has_document_context and not image_data_list:
