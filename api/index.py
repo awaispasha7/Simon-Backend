@@ -98,5 +98,5 @@ except Exception as e:
     import traceback
     traceback.print_exc()
 
-# Export for Vercel
+# Vercel requires handler to be exported
 handler = app
