@@ -347,19 +347,19 @@ async def upload_files(
                         # Continue even if RAG task fails
             
             except Exception as storage_error:
-                        print(f"[UPLOAD] Storage error for {file.filename}: {str(storage_error)}")
-                        import traceback
-                        print(traceback.format_exc())
-                        # Don't fail the entire upload - add error info to response
-                        uploaded_files.append({
-                            "name": file.filename or "unknown",
-                            "size": len(content) if 'content' in locals() else 0,
-                            "url": None,
-                            "type": file_type if 'file_type' in locals() else "unknown",
-                            "asset_id": None,
-                            "error": f"Upload failed: {str(storage_error)}"
-                        })
-                        print(f"[UPLOAD] Added file with error to response (non-fatal)")
+                print(f"[UPLOAD] Storage error for {file.filename}: {str(storage_error)}")
+                import traceback
+                print(traceback.format_exc())
+                # Don't fail the entire upload - add error info to response
+                uploaded_files.append({
+                    "name": file.filename or "unknown",
+                    "size": len(content) if 'content' in locals() else 0,
+                    "url": None,
+                    "type": file_type if 'file_type' in locals() else "unknown",
+                    "asset_id": None,
+                    "error": f"Upload failed: {str(storage_error)}"
+                })
+                print(f"[UPLOAD] Added file with error to response (non-fatal)")
             
             except Exception as file_error:
                 print(f"[UPLOAD] Error processing file {file.filename}: {str(file_error)}")
