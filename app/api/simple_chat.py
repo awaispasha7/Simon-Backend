@@ -534,15 +534,20 @@ async def chat(
                         }
                     
                     # Get the response content and clean markdown formatting
-                    full_response = ai_response.get("response", "I'm sorry, I couldn't generate a response.")
+                    full_response = ai_response.get("response", "")
                     
-                    print(f"✅ [CHAT] AI response received: {len(full_response)} chars")
-                    print(f"✅ [CHAT] Response preview (first 200 chars): {full_response[:200]}")
+                    print(f"✅ [CHAT] AI response received: {len(full_response) if full_response else 0} chars")
+                    print(f"✅ [CHAT] AI response type: {type(full_response)}")
+                    print(f"✅ [CHAT] AI response keys: {list(ai_response.keys()) if isinstance(ai_response, dict) else 'Not a dict'}")
+                    if full_response:
+                        print(f"✅ [CHAT] Response preview (first 200 chars): {full_response[:200]}")
+                    else:
+                        print(f"⚠️ [CHAT] Response is empty or None!")
                     
-                    # Ensure we have a response
+                    # CRITICAL: Ensure we have a response - never send empty
                     if not full_response or not full_response.strip():
-                        full_response = "I'm sorry, I couldn't generate a response. Please try again."
-                        print("[CHAT] WARNING: Empty response from AI, using fallback")
+                        print("[CHAT] CRITICAL WARNING: Empty response from AI, using fallback")
+                        full_response = "I'm processing your request. Please try again if this message appears, or rephrase your question."
                     
                     # Clean markdown formatting: remove asterisks, bold symbols, etc.
                     # (re is imported at top of file)
