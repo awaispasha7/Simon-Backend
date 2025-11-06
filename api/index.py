@@ -97,6 +97,3 @@ except Exception as e:
     print(f"[ERROR] Coach tools router failed: {type(e).__name__}: {e}")
     import traceback
     traceback.print_exc()
-
-# Export handler for Vercel
-handler = app
