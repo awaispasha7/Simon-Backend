@@ -263,13 +263,39 @@ async def upload_files(
                 if not db_response.data:
                     print(f"⚠️  Warning: Failed to store asset metadata in database")
                 
-                uploaded_files.append({
+                # Extract text from documents immediately for use in chat (even with Supabase)
+                extracted_text = None
+                if file_type in ['document', 'script'] and file_extension in ['pdf', 'docx', 'doc', 'txt'] and DOCUMENT_PROCESSOR_AVAILABLE:
+                    print(f"📄 Extracting text from document immediately (with Supabase): {file.filename}")
+                    try:
+                        extracted_text = await document_processor._extract_text(
+                            content,
+                            file.filename,
+                            file.content_type or 'application/pdf'
+                        )
+                        if extracted_text:
+                            print(f"✅ Extracted {len(extracted_text)} chars from {file.filename}")
+                        else:
+                            print(f"⚠️ No text extracted from {file.filename}")
+                    except Exception as extract_error:
+                        print(f"⚠️ Error extracting text: {extract_error}")
+                        import traceback
+                        print(traceback.format_exc())
+                
+                uploaded_file_data = {
                     "name": file.filename,
                     "size": len(content),
                     "url": public_url,
                     "type": file_type,
                     "asset_id": asset_id
-                })
+                }
+                
+                # Include extracted text if available (for immediate use in chat)
+                if extracted_text:
+                    uploaded_file_data["extracted_text"] = extracted_text[:10000]  # Limit to 10k chars
+                    print(f"✅ Included extracted text in upload response for {file.filename}")
+                
+                uploaded_files.append(uploaded_file_data)
                 
                 print(f"✅ File uploaded successfully: {file.filename}")
                 
