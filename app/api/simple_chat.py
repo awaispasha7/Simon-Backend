@@ -280,11 +280,12 @@ async def chat(
                     
                     # Add extracted text to prompt if we have it
                     if extracted_text and extracted_text.strip():
-                        # CRITICAL: Limit to 3000 chars to prevent timeout (reduced from 4000)
+                        # CRITICAL: Limit to 2000 chars to prevent timeout (reduced from 3000)
                         # Large prompts cause AI generation to take 8-9 seconds, causing 10s timeout
-                        document_text_preview = extracted_text[:3000]
-                        if len(extracted_text) > 3000:
-                            document_text_preview += f"\n\n[Note: Document continues beyond this point. Total length: {len(extracted_text)} characters. This is a summary of the key content.]"
+                        # Extract first 2000 chars - this should be enough for summary
+                        document_text_preview = extracted_text[:2000]
+                        if len(extracted_text) > 2000:
+                            document_text_preview += f"\n\n[Note: Document continues beyond this point. Total length: {len(extracted_text)} characters. Please provide a summary of the key points from the content above.]"
                         
                         # CRITICAL: Add clear instructions for the AI to use this document content
                         document_context_text = f"\n\n## IMPORTANT: USER HAS UPLOADED A DOCUMENT\n\n### Document Name: {file_name}\n\n### Document Content:\n{document_text_preview}\n\n### Instructions:\nThe user is asking about the contents of this document. You MUST analyze and summarize the document content above. Do NOT say you cannot process documents or that you didn't receive a proper response. The document content is provided above - use it to answer the user's question.\n"
@@ -492,14 +493,14 @@ async def chat(
                                 rag_context=rag_context,  # RAG context from documents
                                 dossier_context=dossier_context,
                                 image_data=image_data_list,  # Images sent directly (ChatGPT-style)
-                                max_tokens=1500  # Reduce max tokens to speed up generation (reduced from 2000)
+                                max_tokens=1000  # Reduce max tokens to speed up generation (reduced from 1500)
                             ),
-                            timeout=6.0  # Max 6 seconds for AI generation (leaves 4s buffer for safety)
+                            timeout=5.0  # Max 5 seconds for AI generation (leaves 5s buffer for safety)
                         )
                         print(f"🤖 [AI] AI manager returned response")
                         print(f"🤖 [AI] Response keys: {list(ai_response.keys()) if isinstance(ai_response, dict) else 'Not a dict'}")
                     except asyncio.TimeoutError:
-                        print(f"❌ [AI] AI generation timed out after 6 seconds - using fallback")
+                        print(f"❌ [AI] AI generation timed out after 5 seconds - using fallback")
                         ai_response = {
                             "response": "I'm processing your request, but it's taking longer than expected. Please try asking a more specific question about the document, or try again in a moment.",
                             "model_used": "timeout_fallback"
