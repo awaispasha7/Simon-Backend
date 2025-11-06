@@ -1,5 +1,5 @@
 """
-Vercel entry point - Step 3: Add session routes
+Vercel entry point - Step 4: Add chat routes
 """
 import sys
 import os
@@ -38,12 +38,22 @@ except Exception as e:
     import traceback
     traceback.print_exc()
 
-# Step 3: Session router
+# Step 3: Session router (already working)
 try:
     from app.api import simple_session_manager
     app.include_router(simple_session_manager.router, prefix="/api/v1", tags=["session"])
     print("[OK] Session router loaded")
 except Exception as e:
     print(f"[ERROR] Session router failed: {type(e).__name__}: {e}")
+    import traceback
+    traceback.print_exc()
+
+# Step 4: Chat router
+try:
+    from app.api import simple_chat
+    app.include_router(simple_chat.router, prefix="/api/v1", tags=["chat"])
+    print("[OK] Chat router loaded")
+except Exception as e:
+    print(f"[ERROR] Chat router failed: {type(e).__name__}: {e}")
     import traceback
     traceback.print_exc()
