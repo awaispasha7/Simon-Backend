@@ -182,171 +182,171 @@ async def upload_files(
                         import traceback
                         print(traceback.format_exc())
                 
-                    continue  # Skip Supabase storage operations
+                continue  # Skip Supabase storage operations
+            
+            # Upload to Supabase Storage
+            try:
+                # Upload file to storage
+                storage_response = supabase.storage.from_(bucket_name).upload(
+                    path=unique_filename,
+                    file=content,
+                    file_options={"content-type": file.content_type}
+                )
                 
-                # Upload to Supabase Storage
-                try:
-                    # Upload file to storage
-                    storage_response = supabase.storage.from_(bucket_name).upload(
-                        path=unique_filename,
-                        file=content,
-                        file_options={"content-type": file.content_type}
-                    )
-                    
-                    print(f"[UPLOAD] Upload response received")
-                    
-                    # Get URL - use signed URL for anonymous users, public URL for authenticated users
-                    # Signed URLs are valid for 1 year (31536000 seconds) to ensure they don't expire
-                    if not x_user_id:
-                        # For anonymous users, create signed URL with long expiration
-                        try:
-                            print(f"[UPLOAD] Creating signed URL for anonymous user...")
-                            signed_url_response = supabase.storage.from_(bucket_name).create_signed_url(
-                                path=unique_filename,
-                                expires_in=31536000  # 1 year in seconds
-                            )
-                            
-                            # Handle different response formats from Supabase client
-                            if isinstance(signed_url_response, dict):
-                                public_url = signed_url_response.get('signedURL') or signed_url_response.get('signedUrl') or signed_url_response.get('url', '')
-                                if not public_url and hasattr(signed_url_response, 'data'):
-                                    public_url = signed_url_response.data.get('signedURL') or signed_url_response.data.get('signedUrl') or signed_url_response.data.get('url', '')
-                            elif isinstance(signed_url_response, str):
-                                public_url = signed_url_response
-                            elif hasattr(signed_url_response, 'signedURL'):
-                                public_url = signed_url_response.signedURL
-                            elif hasattr(signed_url_response, 'signedUrl'):
-                                public_url = signed_url_response.signedUrl
-                            else:
-                                public_url = supabase.storage.from_(bucket_name).get_public_url(unique_filename)
-                                print(f"[UPLOAD] Could not parse signed URL response, using public URL instead")
-                            
-                            if not public_url or public_url == '':
-                                raise ValueError("Signed URL is empty after parsing")
-                                
-                            print(f"[UPLOAD] Signed URL created: {public_url[:50]}...")
-                        except Exception as url_error:
-                            print(f"[UPLOAD] Error creating signed URL: {url_error}")
-                            import traceback
-                            print(traceback.format_exc())
-                            # Fallback to public URL if signed URL fails
-                            try:
-                                public_url = supabase.storage.from_(bucket_name).get_public_url(unique_filename)
-                                print(f"[UPLOAD] Fallback to public URL: {public_url[:50]}...")
-                            except Exception as fallback_error:
-                                print(f"[UPLOAD] Fallback also failed: {fallback_error}")
-                                raise HTTPException(status_code=500, detail=f"Failed to generate file URL: {str(url_error)}")
-                    else:
-                        # For authenticated users, use public URL
-                        public_url = supabase.storage.from_(bucket_name).get_public_url(unique_filename)
-                        print(f"[UPLOAD] Public URL (authenticated user): {public_url[:50]}...")
-                    
-                    # Store metadata in assets table
-                    if x_project_id:
-                        project_id = x_project_id
-                        print(f"[UPLOAD] Using provided project ID: {project_id}")
-                    else:
-                        project_id = "00000000-0000-0000-0000-000000000002"  # Default project ID for personal assistant
-                        print(f"[UPLOAD] Using default project ID: {project_id}")
-                    
-                    # Use the actual user_id from the request, fallback to test ID if not provided
-                    user_id = x_user_id or "00000000-0000-0000-0000-000000000001"
-                    print(f"[UPLOAD] Using user_id: {user_id}")
-                    asset_id = str(uuid.uuid4())
-                    
-                    asset_record = {
-                        "id": asset_id,
-                        "project_id": project_id,
-                        "type": file_type,
-                        "uri": public_url,
-                        "notes": f"Original filename: {file.filename}"
-                    }
-                    
+                print(f"[UPLOAD] Upload response received")
+                
+                # Get URL - use signed URL for anonymous users, public URL for authenticated users
+                # Signed URLs are valid for 1 year (31536000 seconds) to ensure they don't expire
+                if not x_user_id:
+                    # For anonymous users, create signed URL with long expiration
                     try:
-                        db_response = supabase.table("assets").insert([asset_record]).execute()
-                        if not db_response.data:
-                            print(f"[UPLOAD] Warning: Failed to store asset metadata in database")
-                    except Exception as db_error:
-                        print(f"[UPLOAD] Database error (non-fatal): {db_error}")
-                        # Continue even if DB insert fails
-                    
-                    # Extract text from documents immediately for use in chat (even with Supabase)
-                    extracted_text = None
-                    if file_type in ['document', 'script'] and file_extension in ['pdf', 'docx', 'doc', 'txt']:
-                        if not DOCUMENT_PROCESSOR_AVAILABLE:
-                            print(f"[UPLOAD] Document processor not available - cannot extract text from {file.filename}")
-                        elif not document_processor:
-                            print(f"[UPLOAD] document_processor is None - cannot extract text from {file.filename}")
+                        print(f"[UPLOAD] Creating signed URL for anonymous user...")
+                        signed_url_response = supabase.storage.from_(bucket_name).create_signed_url(
+                            path=unique_filename,
+                            expires_in=31536000  # 1 year in seconds
+                        )
+                        
+                        # Handle different response formats from Supabase client
+                        if isinstance(signed_url_response, dict):
+                            public_url = signed_url_response.get('signedURL') or signed_url_response.get('signedUrl') or signed_url_response.get('url', '')
+                            if not public_url and hasattr(signed_url_response, 'data'):
+                                public_url = signed_url_response.data.get('signedURL') or signed_url_response.data.get('signedUrl') or signed_url_response.data.get('url', '')
+                        elif isinstance(signed_url_response, str):
+                            public_url = signed_url_response
+                        elif hasattr(signed_url_response, 'signedURL'):
+                            public_url = signed_url_response.signedURL
+                        elif hasattr(signed_url_response, 'signedUrl'):
+                            public_url = signed_url_response.signedUrl
                         else:
-                            print(f"[UPLOAD] Extracting text from document immediately (with Supabase): {file.filename}")
-                            print(f"[UPLOAD] File size: {len(content)} bytes, Type: {file.content_type}")
-                            try:
-                                extracted_text = await document_processor._extract_text(
-                                    content,
-                                    file.filename,
-                                    file.content_type or 'application/pdf'
-                                )
-                                if extracted_text:
-                                    # Check if extraction returned an error message (dependencies missing)
-                                    if "not available" in extracted_text.lower() or "not installed" in extracted_text.lower():
-                                        print(f"[UPLOAD] Dependencies missing: {extracted_text}")
-                                        extracted_text = None
-                                    else:
-                                        print(f"[UPLOAD] Extracted {len(extracted_text)} chars from {file.filename}")
-                                        print(f"[UPLOAD] First 200 chars: {extracted_text[:200]}")
-                                else:
-                                    print(f"[UPLOAD] No text extracted from {file.filename} - extraction returned empty")
-                            except Exception as extract_error:
-                                print(f"[UPLOAD] Error extracting text from {file.filename}: {extract_error}")
-                                import traceback
-                                print(f"[UPLOAD] Traceback: {traceback.format_exc()}")
-                                extracted_text = None
-                    else:
-                        print(f"[UPLOAD] Skipping text extraction - file_type={file_type}, extension={file_extension}, processor_available={DOCUMENT_PROCESSOR_AVAILABLE}")
-                    
-                    uploaded_file_data = {
-                        "name": file.filename,
-                        "size": len(content),
-                        "url": public_url,
-                        "type": file_type,
-                        "asset_id": asset_id
-                    }
-                    
-                    # Include extracted text if available (for immediate use in chat)
-                    if extracted_text:
-                        uploaded_file_data["extracted_text"] = extracted_text[:10000]  # Limit to 10k chars
-                        print(f"[UPLOAD] Included extracted text in upload response for {file.filename}")
-                    
-                    uploaded_files.append(uploaded_file_data)
-                    
-                    print(f"[UPLOAD] File uploaded successfully: {file.filename}")
-                    
-                    # Process document for RAG if it's a text-based document
-                    if file_type in ['document', 'script'] and file_extension in ['pdf', 'docx', 'doc', 'txt'] and DOCUMENT_PROCESSOR_AVAILABLE:
-                        print(f"[UPLOAD] Processing document for RAG: {file.filename}")
+                            public_url = supabase.storage.from_(bucket_name).get_public_url(unique_filename)
+                            print(f"[UPLOAD] Could not parse signed URL response, using public URL instead")
                         
-                        # Use single-user personal assistant IDs for RAG (consistent with chat)
-                        rag_user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
-                        rag_project_id = uuid.UUID(project_id)
-                        
-                        # Process document asynchronously for RAG ingestion
+                        if not public_url or public_url == '':
+                            raise ValueError("Signed URL is empty after parsing")
+                            
+                        print(f"[UPLOAD] Signed URL created: {public_url[:50]}...")
+                    except Exception as url_error:
+                        print(f"[UPLOAD] Error creating signed URL: {url_error}")
+                        import traceback
+                        print(traceback.format_exc())
+                        # Fallback to public URL if signed URL fails
                         try:
-                            asyncio.create_task(
-                                process_document_for_rag(
-                                    asset_id=uuid.UUID(asset_id),
-                                    user_id=rag_user_id,
-                                    project_id=rag_project_id,
-                                    file_content=content,
-                                    filename=file.filename,
-                                    content_type=file.content_type or 'application/octet-stream'
-                                )
-                            )
-                            print(f"[UPLOAD] Document processing started for RAG: {file.filename}")
-                        except Exception as rag_task_error:
-                            print(f"[UPLOAD] Failed to start RAG processing task (non-fatal): {rag_task_error}")
-                            # Continue even if RAG task fails
+                            public_url = supabase.storage.from_(bucket_name).get_public_url(unique_filename)
+                            print(f"[UPLOAD] Fallback to public URL: {public_url[:50]}...")
+                        except Exception as fallback_error:
+                            print(f"[UPLOAD] Fallback also failed: {fallback_error}")
+                            raise HTTPException(status_code=500, detail=f"Failed to generate file URL: {str(url_error)}")
+                else:
+                    # For authenticated users, use public URL
+                    public_url = supabase.storage.from_(bucket_name).get_public_url(unique_filename)
+                    print(f"[UPLOAD] Public URL (authenticated user): {public_url[:50]}...")
                 
-                    except Exception as storage_error:
+                # Store metadata in assets table
+                if x_project_id:
+                    project_id = x_project_id
+                    print(f"[UPLOAD] Using provided project ID: {project_id}")
+                else:
+                    project_id = "00000000-0000-0000-0000-000000000002"  # Default project ID for personal assistant
+                    print(f"[UPLOAD] Using default project ID: {project_id}")
+                
+                # Use the actual user_id from the request, fallback to test ID if not provided
+                user_id = x_user_id or "00000000-0000-0000-0000-000000000001"
+                print(f"[UPLOAD] Using user_id: {user_id}")
+                asset_id = str(uuid.uuid4())
+                
+                asset_record = {
+                    "id": asset_id,
+                    "project_id": project_id,
+                    "type": file_type,
+                    "uri": public_url,
+                    "notes": f"Original filename: {file.filename}"
+                }
+                
+                try:
+                    db_response = supabase.table("assets").insert([asset_record]).execute()
+                    if not db_response.data:
+                        print(f"[UPLOAD] Warning: Failed to store asset metadata in database")
+                except Exception as db_error:
+                    print(f"[UPLOAD] Database error (non-fatal): {db_error}")
+                    # Continue even if DB insert fails
+                
+                # Extract text from documents immediately for use in chat (even with Supabase)
+                extracted_text = None
+                if file_type in ['document', 'script'] and file_extension in ['pdf', 'docx', 'doc', 'txt']:
+                    if not DOCUMENT_PROCESSOR_AVAILABLE:
+                        print(f"[UPLOAD] Document processor not available - cannot extract text from {file.filename}")
+                    elif not document_processor:
+                        print(f"[UPLOAD] document_processor is None - cannot extract text from {file.filename}")
+                    else:
+                        print(f"[UPLOAD] Extracting text from document immediately (with Supabase): {file.filename}")
+                        print(f"[UPLOAD] File size: {len(content)} bytes, Type: {file.content_type}")
+                        try:
+                            extracted_text = await document_processor._extract_text(
+                                content,
+                                file.filename,
+                                file.content_type or 'application/pdf'
+                            )
+                            if extracted_text:
+                                # Check if extraction returned an error message (dependencies missing)
+                                if "not available" in extracted_text.lower() or "not installed" in extracted_text.lower():
+                                    print(f"[UPLOAD] Dependencies missing: {extracted_text}")
+                                    extracted_text = None
+                                else:
+                                    print(f"[UPLOAD] Extracted {len(extracted_text)} chars from {file.filename}")
+                                    print(f"[UPLOAD] First 200 chars: {extracted_text[:200]}")
+                            else:
+                                print(f"[UPLOAD] No text extracted from {file.filename} - extraction returned empty")
+                        except Exception as extract_error:
+                            print(f"[UPLOAD] Error extracting text from {file.filename}: {extract_error}")
+                            import traceback
+                            print(f"[UPLOAD] Traceback: {traceback.format_exc()}")
+                            extracted_text = None
+                else:
+                    print(f"[UPLOAD] Skipping text extraction - file_type={file_type}, extension={file_extension}, processor_available={DOCUMENT_PROCESSOR_AVAILABLE}")
+                
+                uploaded_file_data = {
+                    "name": file.filename,
+                    "size": len(content),
+                    "url": public_url,
+                    "type": file_type,
+                    "asset_id": asset_id
+                }
+                
+                # Include extracted text if available (for immediate use in chat)
+                if extracted_text:
+                    uploaded_file_data["extracted_text"] = extracted_text[:10000]  # Limit to 10k chars
+                    print(f"[UPLOAD] Included extracted text in upload response for {file.filename}")
+                
+                uploaded_files.append(uploaded_file_data)
+                
+                print(f"[UPLOAD] File uploaded successfully: {file.filename}")
+                
+                # Process document for RAG if it's a text-based document
+                if file_type in ['document', 'script'] and file_extension in ['pdf', 'docx', 'doc', 'txt'] and DOCUMENT_PROCESSOR_AVAILABLE:
+                    print(f"[UPLOAD] Processing document for RAG: {file.filename}")
+                    
+                    # Use single-user personal assistant IDs for RAG (consistent with chat)
+                    rag_user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+                    rag_project_id = uuid.UUID(project_id)
+                    
+                    # Process document asynchronously for RAG ingestion
+                    try:
+                        asyncio.create_task(
+                            process_document_for_rag(
+                                asset_id=uuid.UUID(asset_id),
+                                user_id=rag_user_id,
+                                project_id=rag_project_id,
+                                file_content=content,
+                                filename=file.filename,
+                                content_type=file.content_type or 'application/octet-stream'
+                            )
+                        )
+                        print(f"[UPLOAD] Document processing started for RAG: {file.filename}")
+                    except Exception as rag_task_error:
+                        print(f"[UPLOAD] Failed to start RAG processing task (non-fatal): {rag_task_error}")
+                        # Continue even if RAG task fails
+            
+            except Exception as storage_error:
                         print(f"[UPLOAD] Storage error for {file.filename}: {str(storage_error)}")
                         import traceback
                         print(traceback.format_exc())
