@@ -71,20 +71,18 @@ async def upload_files(
     """
     Upload files to Supabase Storage and store metadata in assets table
     """
-    print(f"📥 Received {len(files)} file(s) for upload")
-    print(f"📥 Session ID: {x_session_id}")
-    print(f"📥 Project ID: {x_project_id}")
-    print(f"📥 User ID: {x_user_id}")
-    print(f"📥 User ID type: {type(x_user_id)}")
-    print(f"📥 User ID repr: {repr(x_user_id)}")
+    print(f"[UPLOAD] Received {len(files)} file(s) for upload")
+    print(f"[UPLOAD] Session ID: {x_session_id}")
+    print(f"[UPLOAD] Project ID: {x_project_id}")
+    print(f"[UPLOAD] User ID: {x_user_id}")
     
     # Debug: Check if we have the required data for guest users
     if not x_user_id and not x_session_id:
-        print("⚠️ [UPLOAD] Guest user with no session ID - this might cause issues")
+        print("[UPLOAD] Guest user with no session ID - this might cause issues")
     elif not x_user_id and x_session_id:
-        print("✅ [UPLOAD] Guest user with session ID - should work")
+        print("[UPLOAD] Guest user with session ID - should work")
     elif x_user_id:
-        print("✅ [UPLOAD] Authenticated user - should work")
+        print("[UPLOAD] Authenticated user - should work")
     
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
@@ -97,24 +95,25 @@ async def upload_files(
     
     try:
         for file in files:
-            print(f"📄 Processing file: {file.filename}")
+            print(f"[UPLOAD] Processing file: {file.filename}")
             
-            # Validate file size
-            content = await file.read()
-            if len(content) > MAX_FILE_SIZE:
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"File {file.filename} exceeds maximum size of 10MB"
-                )
-            
-            # Generate unique filename
-            file_extension = file.filename.split('.')[-1] if '.' in file.filename else ''
-            unique_filename = f"{uuid.uuid4()}.{file_extension}"
-            
-            # Determine file type
-            file_type = get_file_type(file.filename)
-            
-            print(f"📤 Uploading to Supabase Storage: {unique_filename}")
+            try:
+                # Validate file size
+                content = await file.read()
+                if len(content) > MAX_FILE_SIZE:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"File {file.filename} exceeds maximum size of 10MB"
+                    )
+                
+                # Generate unique filename
+                file_extension = file.filename.split('.')[-1] if '.' in file.filename else ''
+                unique_filename = f"{uuid.uuid4()}.{file_extension}"
+                
+                # Determine file type
+                file_type = get_file_type(file.filename)
+                
+                print(f"[UPLOAD] Uploading to Supabase Storage: {unique_filename}")
 
             # If Supabase is not configured, still process documents for RAG (critical feature)
             asset_id = str(uuid.uuid4())
@@ -124,12 +123,12 @@ async def upload_files(
             rag_project_id = uuid.UUID(x_project_id) if x_project_id else uuid.UUID("00000000-0000-0000-0000-000000000002")
             
             if not supabase:
-                print("⚠️ Supabase not configured - storing minimal metadata, but will still process for RAG")
+                print("[UPLOAD] Supabase not configured - storing minimal metadata, but will still process for RAG")
                 
                 # For documents, extract text immediately so it can be used in chat
                 extracted_text = None
                 if file_type in ['document', 'script'] and file_extension in ['pdf', 'docx', 'doc', 'txt'] and DOCUMENT_PROCESSOR_AVAILABLE:
-                    print(f"📄 Extracting text from document immediately (no Supabase): {file.filename}")
+                    print(f"[UPLOAD] Extracting text from document immediately (no Supabase): {file.filename}")
                     try:
                         from app.ai.document_processor import document_processor
                         extracted_text = await document_processor._extract_text(
@@ -138,11 +137,11 @@ async def upload_files(
                             file.content_type or 'application/pdf'
                         )
                         if extracted_text:
-                            print(f"✅ Extracted {len(extracted_text)} chars from {file.filename}")
+                            print(f"[UPLOAD] Extracted {len(extracted_text)} chars from {file.filename}")
                         else:
-                            print(f"⚠️ No text extracted from {file.filename}")
+                            print(f"[UPLOAD] No text extracted from {file.filename}")
                     except Exception as extract_error:
-                        print(f"⚠️ Error extracting text: {extract_error}")
+                        print(f"[UPLOAD] Error extracting text: {extract_error}")
                         import traceback
                         print(traceback.format_exc())
                 
@@ -158,13 +157,13 @@ async def upload_files(
                 # Include extracted text if available (for immediate use in chat)
                 if extracted_text:
                     uploaded_file_data["extracted_text"] = extracted_text[:10000]  # Limit to 10k chars
-                    print(f"✅ Included extracted text in upload response for {file.filename}")
+                    print(f"[UPLOAD] Included extracted text in upload response for {file.filename}")
                 
                 uploaded_files.append(uploaded_file_data)
                 
                 # CRITICAL: Still process documents for RAG even without Supabase
                 if file_type in ['document', 'script'] and file_extension in ['pdf', 'docx', 'doc', 'txt'] and DOCUMENT_PROCESSOR_AVAILABLE:
-                    print(f"🔄 Processing document for RAG (no Supabase): {file.filename}")
+                    print(f"[UPLOAD] Processing document for RAG (no Supabase): {file.filename}")
                     try:
                         # Process document asynchronously for RAG ingestion
                         asyncio.create_task(
@@ -177,9 +176,9 @@ async def upload_files(
                                 content_type=file.content_type or 'application/octet-stream'
                             )
                         )
-                        print(f"✅ Document processing started for RAG: {file.filename}")
+                        print(f"[UPLOAD] Document processing started for RAG: {file.filename}")
                     except Exception as rag_error:
-                        print(f"⚠️ Failed to start RAG processing: {rag_error}")
+                        print(f"[UPLOAD] Failed to start RAG processing: {rag_error}")
                         import traceback
                         print(traceback.format_exc())
                 
@@ -194,28 +193,22 @@ async def upload_files(
                     file_options={"content-type": file.content_type}
                 )
                 
-                print(f"✅ Upload response: {storage_response}")
+                print(f"[UPLOAD] Upload response received")
                 
                 # Get URL - use signed URL for anonymous users, public URL for authenticated users
                 # Signed URLs are valid for 1 year (31536000 seconds) to ensure they don't expire
                 if not x_user_id:
                     # For anonymous users, create signed URL with long expiration
                     try:
-                        print(f"🔐 Creating signed URL for anonymous user...")
+                        print(f"[UPLOAD] Creating signed URL for anonymous user...")
                         signed_url_response = supabase.storage.from_(bucket_name).create_signed_url(
                             path=unique_filename,
                             expires_in=31536000  # 1 year in seconds
                         )
                         
-                        # Debug: Print the full response to understand its structure
-                        print(f"🔍 Signed URL response type: {type(signed_url_response)}")
-                        print(f"🔍 Signed URL response: {signed_url_response}")
-                        
                         # Handle different response formats from Supabase client
-                        # The Supabase Python client typically returns a dict with 'signedURL' key
                         if isinstance(signed_url_response, dict):
                             public_url = signed_url_response.get('signedURL') or signed_url_response.get('signedUrl') or signed_url_response.get('url', '')
-                            # If still no URL, check if it's a StorageApiResponse object
                             if not public_url and hasattr(signed_url_response, 'data'):
                                 public_url = signed_url_response.data.get('signedURL') or signed_url_response.data.get('signedUrl') or signed_url_response.data.get('url', '')
                         elif isinstance(signed_url_response, str):
@@ -225,46 +218,40 @@ async def upload_files(
                         elif hasattr(signed_url_response, 'signedUrl'):
                             public_url = signed_url_response.signedUrl
                         else:
-                            # Fallback: try to get public URL
                             public_url = supabase.storage.from_(bucket_name).get_public_url(unique_filename)
-                            print(f"⚠️ Could not parse signed URL response, using public URL instead")
+                            print(f"[UPLOAD] Could not parse signed URL response, using public URL instead")
                         
                         if not public_url or public_url == '':
                             raise ValueError("Signed URL is empty after parsing")
                             
-                        print(f"✅ Signed URL (anonymous user): {public_url}")
+                        print(f"[UPLOAD] Signed URL created: {public_url[:50]}...")
                     except Exception as url_error:
-                        print(f"❌ Error creating signed URL: {url_error}")
-                        print(f"❌ Error type: {type(url_error)}")
+                        print(f"[UPLOAD] Error creating signed URL: {url_error}")
                         import traceback
-                        print(f"❌ Traceback: {traceback.format_exc()}")
+                        print(traceback.format_exc())
                         # Fallback to public URL if signed URL fails
                         try:
                             public_url = supabase.storage.from_(bucket_name).get_public_url(unique_filename)
-                            print(f"⚠️ Fallback to public URL: {public_url}")
+                            print(f"[UPLOAD] Fallback to public URL: {public_url[:50]}...")
                         except Exception as fallback_error:
-                            print(f"❌ Fallback also failed: {fallback_error}")
+                            print(f"[UPLOAD] Fallback also failed: {fallback_error}")
                             raise HTTPException(status_code=500, detail=f"Failed to generate file URL: {str(url_error)}")
                 else:
                     # For authenticated users, use public URL
                     public_url = supabase.storage.from_(bucket_name).get_public_url(unique_filename)
-                    print(f"🔗 Public URL (authenticated user): {public_url}")
+                    print(f"[UPLOAD] Public URL (authenticated user): {public_url[:50]}...")
                 
                 # Store metadata in assets table
-                # For single-user personal assistant, use fixed project ID (no dossier check needed)
                 if x_project_id:
                     project_id = x_project_id
-                    print(f"✅ Using provided project ID: {project_id}")
+                    print(f"[UPLOAD] Using provided project ID: {project_id}")
                 else:
                     project_id = "00000000-0000-0000-0000-000000000002"  # Default project ID for personal assistant
-                    print(f"✅ Using default project ID: {project_id}")
-                
-                # Note: Dossier/project validation removed for single-user personal assistant
-                # All documents are accessible across all projects for RAG retrieval
+                    print(f"[UPLOAD] Using default project ID: {project_id}")
                 
                 # Use the actual user_id from the request, fallback to test ID if not provided
                 user_id = x_user_id or "00000000-0000-0000-0000-000000000001"
-                print(f"🔍 Using user_id: {user_id}")
+                print(f"[UPLOAD] Using user_id: {user_id}")
                 asset_id = str(uuid.uuid4())
                 
                 asset_record = {
@@ -275,21 +262,24 @@ async def upload_files(
                     "notes": f"Original filename: {file.filename}"
                 }
                 
-                db_response = supabase.table("assets").insert([asset_record]).execute()
-                
-                if not db_response.data:
-                    print(f"⚠️  Warning: Failed to store asset metadata in database")
+                try:
+                    db_response = supabase.table("assets").insert([asset_record]).execute()
+                    if not db_response.data:
+                        print(f"[UPLOAD] Warning: Failed to store asset metadata in database")
+                except Exception as db_error:
+                    print(f"[UPLOAD] Database error (non-fatal): {db_error}")
+                    # Continue even if DB insert fails
                 
                 # Extract text from documents immediately for use in chat (even with Supabase)
                 extracted_text = None
                 if file_type in ['document', 'script'] and file_extension in ['pdf', 'docx', 'doc', 'txt']:
                     if not DOCUMENT_PROCESSOR_AVAILABLE:
-                        print(f"❌ [UPLOAD] Document processor not available - cannot extract text from {file.filename}")
+                        print(f"[UPLOAD] Document processor not available - cannot extract text from {file.filename}")
                     elif not document_processor:
-                        print(f"❌ [UPLOAD] document_processor is None - cannot extract text from {file.filename}")
+                        print(f"[UPLOAD] document_processor is None - cannot extract text from {file.filename}")
                     else:
-                        print(f"📄 [UPLOAD] Extracting text from document immediately (with Supabase): {file.filename}")
-                        print(f"📄 [UPLOAD] File size: {len(content)} bytes, Type: {file.content_type}")
+                        print(f"[UPLOAD] Extracting text from document immediately (with Supabase): {file.filename}")
+                        print(f"[UPLOAD] File size: {len(content)} bytes, Type: {file.content_type}")
                         try:
                             extracted_text = await document_processor._extract_text(
                                 content,
@@ -299,20 +289,20 @@ async def upload_files(
                             if extracted_text:
                                 # Check if extraction returned an error message (dependencies missing)
                                 if "not available" in extracted_text.lower() or "not installed" in extracted_text.lower():
-                                    print(f"❌ [UPLOAD] Dependencies missing: {extracted_text}")
+                                    print(f"[UPLOAD] Dependencies missing: {extracted_text}")
                                     extracted_text = None
                                 else:
-                                    print(f"✅ [UPLOAD] Extracted {len(extracted_text)} chars from {file.filename}")
-                                    print(f"✅ [UPLOAD] First 200 chars: {extracted_text[:200]}")
+                                    print(f"[UPLOAD] Extracted {len(extracted_text)} chars from {file.filename}")
+                                    print(f"[UPLOAD] First 200 chars: {extracted_text[:200]}")
                             else:
-                                print(f"⚠️ [UPLOAD] No text extracted from {file.filename} - extraction returned empty")
+                                print(f"[UPLOAD] No text extracted from {file.filename} - extraction returned empty")
                         except Exception as extract_error:
-                            print(f"❌ [UPLOAD] Error extracting text from {file.filename}: {extract_error}")
+                            print(f"[UPLOAD] Error extracting text from {file.filename}: {extract_error}")
                             import traceback
-                            print(f"❌ [UPLOAD] Traceback: {traceback.format_exc()}")
+                            print(f"[UPLOAD] Traceback: {traceback.format_exc()}")
                             extracted_text = None
                 else:
-                    print(f"ℹ️ [UPLOAD] Skipping text extraction - file_type={file_type}, extension={file_extension}, processor_available={DOCUMENT_PROCESSOR_AVAILABLE}")
+                    print(f"[UPLOAD] Skipping text extraction - file_type={file_type}, extension={file_extension}, processor_available={DOCUMENT_PROCESSOR_AVAILABLE}")
                 
                 uploaded_file_data = {
                     "name": file.filename,
@@ -325,46 +315,78 @@ async def upload_files(
                 # Include extracted text if available (for immediate use in chat)
                 if extracted_text:
                     uploaded_file_data["extracted_text"] = extracted_text[:10000]  # Limit to 10k chars
-                    print(f"✅ Included extracted text in upload response for {file.filename}")
+                    print(f"[UPLOAD] Included extracted text in upload response for {file.filename}")
                 
                 uploaded_files.append(uploaded_file_data)
                 
-                print(f"✅ File uploaded successfully: {file.filename}")
-                
-                # Image analysis is now done during chat with full context (conversation history + RAG)
-                # This ensures better accuracy and context-aware analysis
-                # Analysis will be stored when user sends a message with the image attached
+                print(f"[UPLOAD] File uploaded successfully: {file.filename}")
                 
                 # Process document for RAG if it's a text-based document
                 if file_type in ['document', 'script'] and file_extension in ['pdf', 'docx', 'doc', 'txt'] and DOCUMENT_PROCESSOR_AVAILABLE:
-                    print(f"🔄 Processing document for RAG: {file.filename}")
+                    print(f"[UPLOAD] Processing document for RAG: {file.filename}")
                     
                     # Use single-user personal assistant IDs for RAG (consistent with chat)
                     rag_user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
                     rag_project_id = uuid.UUID(project_id)
                     
                     # Process document asynchronously for RAG ingestion
-                    asyncio.create_task(
-                        process_document_for_rag(
-                            asset_id=uuid.UUID(asset_id),
-                            user_id=rag_user_id,
-                            project_id=rag_project_id,
-                            file_content=content,
-                            filename=file.filename,
-                            content_type=file.content_type or 'application/octet-stream'
+                    try:
+                        asyncio.create_task(
+                            process_document_for_rag(
+                                asset_id=uuid.UUID(asset_id),
+                                user_id=rag_user_id,
+                                project_id=rag_project_id,
+                                file_content=content,
+                                filename=file.filename,
+                                content_type=file.content_type or 'application/octet-stream'
+                            )
                         )
-                    )
-                    print(f"✅ Document processing started for RAG: {file.filename}")
+                        print(f"[UPLOAD] Document processing started for RAG: {file.filename}")
+                    except Exception as rag_task_error:
+                        print(f"[UPLOAD] Failed to start RAG processing task (non-fatal): {rag_task_error}")
+                        # Continue even if RAG task fails
                 
             except Exception as storage_error:
-                print(f"❌ Storage error: {str(storage_error)}")
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to upload {file.filename}: {str(storage_error)}"
-                )
+                print(f"[UPLOAD] Storage error for {file.filename}: {str(storage_error)}")
+                import traceback
+                print(traceback.format_exc())
+                # Don't fail the entire upload - add error info to response
+                uploaded_files.append({
+                    "name": file.filename,
+                    "size": len(content),
+                    "url": None,
+                    "type": file_type,
+                    "asset_id": None,
+                    "error": f"Upload failed: {str(storage_error)}"
+                })
+                print(f"[UPLOAD] Added file with error to response (non-fatal)")
+            
+            except Exception as file_error:
+                print(f"[UPLOAD] Error processing file {file.filename}: {str(file_error)}")
+                import traceback
+                print(traceback.format_exc())
+                # Add error to response but don't fail entire upload
+                uploaded_files.append({
+                    "name": file.filename or "unknown",
+                    "size": 0,
+                    "url": None,
+                    "type": "unknown",
+                    "asset_id": None,
+                    "error": f"Processing failed: {str(file_error)}"
+                })
     
     except Exception as e:
-        print(f"❌ Upload error: {str(e)}")
+        print(f"[UPLOAD] Upload error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        # Return partial success if we have any files
+        if uploaded_files:
+            return {
+                "success": True,
+                "files": uploaded_files,
+                "count": len(uploaded_files),
+                "warning": f"Some files may have failed: {str(e)}"
+            }
         raise HTTPException(status_code=500, detail=str(e))
     
     return {
@@ -394,7 +416,7 @@ async def process_document_for_rag(
         content_type: MIME type
     """
     try:
-        print(f"🔄 Starting RAG processing for document: {filename}")
+        print(f"[RAG] Starting RAG processing for document: {filename}")
         
         result = await document_processor.process_document(
             asset_id=asset_id,
@@ -406,10 +428,12 @@ async def process_document_for_rag(
         )
         
         if result["success"]:
-            print(f"✅ RAG processing completed for {filename}: {result['embeddings_created']} embeddings created")
+            print(f"[RAG] RAG processing completed for {filename}: {result['embeddings_created']} embeddings created")
         else:
-            print(f"❌ RAG processing failed for {filename}: {result.get('error', 'Unknown error')}")
+            print(f"[RAG] RAG processing failed for {filename}: {result.get('error', 'Unknown error')}")
             
     except Exception as e:
-        print(f"❌ Error in background RAG processing for {filename}: {e}")
+        print(f"[RAG] Error in background RAG processing for {filename}: {e}")
+        import traceback
+        print(traceback.format_exc())
 
