@@ -336,11 +336,14 @@ async def chat(
                     if dossier_extractor and project_id:
                         try:
                             from ..database.session_service_supabase import session_service
-                            # Get existing dossier with timeout
-                            dossier = await asyncio.wait_for(
-                                asyncio.to_thread(session_service.get_dossier, UUID(project_id), UUID(user_id)),
-                                timeout=2.0
-                            )
+                            # Get existing dossier with timeout (run in thread pool)
+                            import concurrent.futures
+                            loop = asyncio.get_event_loop()
+                            with concurrent.futures.ThreadPoolExecutor() as executor:
+                                dossier = await asyncio.wait_for(
+                                    loop.run_in_executor(executor, session_service.get_dossier, UUID(project_id), UUID(user_id)),
+                                    timeout=2.0
+                                )
                             if dossier and dossier.snapshot_json:
                                 dossier_context = dossier.snapshot_json
                                 print(f"[DOSSIER] Using existing dossier: {dossier.title}")
