@@ -1,5 +1,5 @@
 """
-Vercel entry point - Load routes one at a time to find the problem
+Vercel entry point - Start with NO route imports, add them one by one
 """
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,51 +38,21 @@ async def options_handler(request: Request):
         }
     )
 
-# Try loading auth route ONLY
-try:
-    print("[TEST] Attempting to import auth...")
-    from app.api import auth
-    print("[TEST] Auth imported successfully")
-    app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
-    print("[OK] Auth router loaded")
-except Exception as e:
-    print(f"[ERROR] Auth router failed: {type(e).__name__}: {e}")
-    import traceback
-    traceback.print_exc()
-    # Create fallback login endpoint
-    @app.post("/api/v1/auth/login")
-    async def fallback_login():
-        return JSONResponse(
-            status_code=500,
-            content={"detail": "Auth router not available"},
-            headers={"Access-Control-Allow-Origin": "*"}
-        )
+# Create minimal auth endpoint without importing the router
+@app.post("/api/v1/auth/login")
+async def login():
+    return JSONResponse(
+        status_code=401,
+        content={"detail": "Login endpoint - needs credentials"},
+        headers={"Access-Control-Allow-Origin": "*"}
+    )
 
-# Try loading session route ONLY
-try:
-    print("[TEST] Attempting to import simple_session_manager...")
-    from app.api import simple_session_manager
-    print("[TEST] Session imported successfully")
-    app.include_router(simple_session_manager.router, prefix="/api/v1", tags=["session"])
-    print("[OK] Session router loaded")
-except Exception as e:
-    print(f"[ERROR] Session router failed: {type(e).__name__}: {e}")
-    import traceback
-    traceback.print_exc()
-
-# Try loading chat route ONLY
-try:
-    print("[TEST] Attempting to import simple_chat...")
-    from app.api import simple_chat
-    print("[TEST] Chat imported successfully")
-    app.include_router(simple_chat.router, prefix="/api/v1", tags=["chat"])
-    print("[OK] Chat router loaded")
-except Exception as e:
-    print(f"[ERROR] Chat router failed: {type(e).__name__}: {e}")
-    import traceback
-    traceback.print_exc()
-
-print("[SUCCESS] App initialization complete")
+@app.get("/api/v1/auth/me")
+async def get_me():
+    return JSONResponse(
+        content={"user_id": "single_client", "username": "admin"},
+        headers={"Access-Control-Allow-Origin": "*"}
+    )
 
 # Export handler for Vercel
 handler = app
