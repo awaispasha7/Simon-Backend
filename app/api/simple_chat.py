@@ -169,8 +169,8 @@ async def chat(
             # Only fetch history if no document (documents provide their own context)
             try:
                 conversation_history = await asyncio.wait_for(
-                    _get_conversation_history(str(session_id), str(user_id), limit=3),  # Reduced to 3 messages
-                    timeout=0.3  # Max 0.3 seconds for history (critical for preventing timeout)
+                    _get_conversation_history(str(session_id), str(user_id), limit=10),  # Restored to 10 messages
+                    timeout=1.0  # Max 1 second for history
                 )
             except asyncio.TimeoutError:
                 print("[WARNING] Conversation history fetch timed out - continuing without it")
