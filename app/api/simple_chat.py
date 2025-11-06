@@ -391,12 +391,14 @@ async def chat(
         # Generate and stream AI response
         async def generate_stream():
             try:
+                print(f"[STREAM] Starting stream generation...")
                 # Send "thinking" message immediately to start streaming
                 thinking_chunk = {
                     "type": "thinking",
                     "content": "Thinking..."
                 }
                 yield f"data: {json.dumps(thinking_chunk)}\n\n"
+                print(f"[STREAM] Sent thinking chunk")
                 
                 # Generate AI response
                 if AI_AVAILABLE and ai_manager:
@@ -638,10 +640,13 @@ async def chat(
                     chunk_count = 0
                     total_chunks = len(sentence_chunks)
                     
+                    # CRITICAL: Ensure we send at least one chunk - never skip all chunks
+                    chunks_sent = 0
                     for i, chunk in enumerate(sentence_chunks):
                         if not chunk.strip():  # Skip empty chunks
                             continue
                         chunk_count += 1
+                        chunks_sent += 1
                         chunk_data = {
                             "type": "content",
                             "content": chunk,
@@ -653,6 +658,18 @@ async def chat(
                         # Minimal delay - only 0.01s for smooth streaming without timeout
                         if i < total_chunks - 1:  # No delay on last chunk
                             await asyncio.sleep(0.01)
+                    
+                    # CRITICAL FIX: If no chunks were sent (all were empty), send the full response as one chunk
+                    if chunks_sent == 0:
+                        print(f"[CHAT] WARNING: No chunks sent! Sending full response as single chunk")
+                        fallback_chunk = {
+                            "type": "content",
+                            "content": full_response if full_response.strip() else "I'm processing your request. Please try again.",
+                            "chunk": 1,
+                            "done": True
+                        }
+                        yield f"data: {json.dumps(fallback_chunk)}\n\n"
+                        print(f"[CHAT] Sent fallback chunk: {len(fallback_chunk['content'])} chars")
                     
                     # Save AI response
                     assistant_message_id = await _save_message(
