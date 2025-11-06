@@ -411,33 +411,52 @@ async def chat(
                     # REMOVED: Dossier is not required for chat functionality - completely skip it
                     dossier_context = None
                     
-                    # Get RAG context from uploaded documents (with timeout to avoid blocking)
-                    # SKIP RAG if document is already in prompt - no need for it!
+                    # ALWAYS enable RAG to retrieve relevant ingested documents
+                    # RAG searches through all ingested documents to find relevant context
+                    # Even if a document is attached in current chat, RAG can still find other relevant documents
                     rag_context = None
-                    if rag_service and not has_document_context:
+                    if rag_service:
                         try:
-                            rag_user_id = UUID("00000000-0000-0000-0000-000000000001")
-                            print(f"[RAG] Getting RAG context (with 3s timeout)")
+                            # Use actual user_id and project_id from the request
+                            rag_user_id = user_id if user_id else UUID("00000000-0000-0000-0000-000000000001")
+                            rag_project_id = project_id  # Use actual project_id (can be None to search all projects)
                             
-                            # Use 3 second timeout now that we have Vercel Pro (more time available)
+                            print(f"[RAG] Getting RAG context (with 10s timeout)")
+                            print(f"[RAG] User ID: {rag_user_id}, Project ID: {rag_project_id}")
+                            print(f"[RAG] Query: {chat_request.text[:100]}...")
+                            
+                            # Use 10 second timeout with Vercel Pro - enough time to search through documents
                             rag_context = await asyncio.wait_for(
                                 rag_service.get_rag_context(
                                     user_message=chat_request.text,
                                     user_id=rag_user_id,
-                                    project_id=None,
+                                    project_id=rag_project_id,  # Use actual project_id
                                     conversation_history=conversation_history
                                 ),
-                                timeout=3.0
+                                timeout=10.0
                             )
-                            print(f"[RAG] Context retrieved: {rag_context.get('user_context_count', 0)} messages, {rag_context.get('document_context_count', 0)} chunks")
+                            
+                            user_ctx_count = rag_context.get('user_context_count', 0)
+                            doc_ctx_count = rag_context.get('document_context_count', 0)
+                            global_ctx_count = rag_context.get('global_context_count', 0)
+                            
+                            print(f"[RAG] ✅ Context retrieved: {user_ctx_count} user messages, {doc_ctx_count} document chunks, {global_ctx_count} global patterns")
+                            
+                            if doc_ctx_count > 0:
+                                print(f"[RAG] ✅ Found {doc_ctx_count} relevant document chunks - AI will use this context!")
+                            else:
+                                print(f"[RAG] ⚠️ No document chunks found - this might mean no documents match the query")
+                                
                         except asyncio.TimeoutError:
-                            print("[WARNING] RAG context fetch timed out - continuing without it")
+                            print("[RAG] ❌ RAG context fetch timed out after 10s - continuing without it")
                             rag_context = None
                         except Exception as e:
-                            print(f"[WARNING] RAG context error: {e}")
+                            print(f"[RAG] ❌ RAG context error: {e}")
+                            import traceback
+                            print(f"[RAG] ❌ Traceback: {traceback.format_exc()}")
                             rag_context = None
-                    elif has_document_context:
-                        print(f"[RAG] Skipping RAG - document content already in prompt")
+                    else:
+                        print(f"[RAG] ⚠️ RAG service not available")
                     
                     # Enhance user prompt - include document context and image guidance
                     # Model will see images + conversation history + RAG context + document text in single call
