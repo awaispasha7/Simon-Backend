@@ -1019,7 +1019,7 @@ async def _save_message(
     supabase.table("chat_messages").insert(message_data).execute()
     return message_id
 
-async def _get_conversation_history(session_id: str, user_id: str, limit: int = 20) -> List[Dict]:
+async def _get_conversation_history(session_id: str, user_id: str, limit: int = 10) -> List[Dict]:
     """Get conversation history for context"""
     supabase = get_supabase_client()
     if not supabase:
