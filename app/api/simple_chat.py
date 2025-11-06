@@ -508,11 +508,21 @@ async def chat(
                         )
                         print(f"🤖 [AI] AI manager returned response")
                         print(f"🤖 [AI] Response keys: {list(ai_response.keys()) if isinstance(ai_response, dict) else 'Not a dict'}")
+                    except asyncio.TimeoutError:
+                        print(f"❌ [AI] AI generation timed out after 7 seconds - using fallback")
+                        ai_response = {
+                            "response": "I'm processing your request, but it's taking longer than expected. Please try asking a more specific question about the document, or try again in a moment.",
+                            "model_used": "timeout_fallback"
+                        }
                     except Exception as ai_error:
                         print(f"❌ [AI] Error calling AI manager: {ai_error}")
                         import traceback
                         print(f"❌ [AI] Traceback: {traceback.format_exc()}")
-                        raise
+                        # Use fallback instead of raising to prevent complete failure
+                        ai_response = {
+                            "response": "I encountered an error processing your request. Please try again.",
+                            "model_used": "error_fallback"
+                        }
                     
                     # Get the response content and clean markdown formatting
                     full_response = ai_response.get("response", "I'm sorry, I couldn't generate a response.")
