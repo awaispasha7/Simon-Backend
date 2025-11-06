@@ -146,10 +146,11 @@ async def upload_files(
                         print(traceback.format_exc())
                 
                 # Create placeholder asset record without DB
+                # Use a data URL or empty string instead of local:// to avoid browser errors
                 uploaded_file_data = {
                     "name": file.filename,
                     "size": len(content),
-                    "url": f"local://{asset_id}",  # Placeholder URL
+                    "url": "",  # Empty URL for local files (no Supabase)
                     "type": file_type,
                     "asset_id": asset_id
                 }
