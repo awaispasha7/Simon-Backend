@@ -246,13 +246,21 @@ async def chat(
                     
                     # Add extracted text to prompt if we have it
                     if extracted_text and extracted_text.strip():
-                        document_context_text = f"\n\n## CONTENT FROM UPLOADED DOCUMENT ({file_name}):\n{extracted_text[:5000]}\n"  # Limit to first 5000 chars
+                        # Limit to first 8000 chars to avoid token limits, but keep more than before
+                        document_text_preview = extracted_text[:8000]
+                        if len(extracted_text) > 8000:
+                            document_text_preview += f"\n\n[Note: Document continues beyond this point. Total length: {len(extracted_text)} characters.]"
+                        
+                        document_context_text = f"\n\n## CONTENT FROM UPLOADED DOCUMENT ({file_name}):\n{document_text_preview}\n"
                         chat_request.text = chat_request.text + document_context_text
-                        print(f"✅ [DOCUMENT] Added {len(extracted_text)} chars from {file_name} to prompt")
+                        print(f"✅ [DOCUMENT] Added {len(extracted_text)} chars from {file_name} to prompt (showing first {len(document_text_preview)} chars)")
+                        print(f"✅ [DOCUMENT] Full prompt length after adding document: {len(chat_request.text)} chars")
                     else:
-                        print(f"⚠️ [DOCUMENT] No text available for {file_name}")
-                        document_note = f"\n\n## NOTE: User has attached a document file named '{file_name}'. Please acknowledge this and work with any information the user provides in their message."
+                        print(f"⚠️ [DOCUMENT] No text available for {file_name} - extraction may have failed")
+                        # Still add a note so AI knows about the document
+                        document_note = f"\n\n## NOTE: User has attached a document file named '{file_name}'. The document content could not be extracted automatically. Please ask the user to provide key points or information from the document if needed."
                         chat_request.text = chat_request.text + document_note
+                        print(f"⚠️ [DOCUMENT] Added document note to prompt (no extracted text)")
                 # Then handle images
                 elif is_image:
                     print(f"🖼️ [IMAGE] Detected image file: {file_name}")
@@ -400,9 +408,22 @@ async def chat(
                             print(f"[WARNING] RAG context error: {e}")
                             rag_context = None
                     
-                    # Enhance user prompt when images are present to ensure detailed analysis
-                    # Model will see images + conversation history + RAG context in single call
+                    # Enhance user prompt - include document context and image guidance
+                    # Model will see images + conversation history + RAG context + document text in single call
                     enhanced_prompt = chat_request.text
+                    
+                    # Check if document text was added to the prompt
+                    has_document_context = "## CONTENT FROM UPLOADED DOCUMENT" in enhanced_prompt or "## NOTE: User has attached a document" in enhanced_prompt
+                    
+                    # Add guidance for document analysis if document is present
+                    if has_document_context and not image_data_list:
+                        # Document only - ensure AI analyzes it
+                        if enhanced_prompt and not enhanced_prompt.strip().startswith("##"):
+                            # User provided question - AI should answer based on document
+                            enhanced_prompt = f"{enhanced_prompt}\n\n[Note: Please analyze the attached document content and provide a comprehensive answer based on the document's main points and key information.]"
+                        elif "## CONTENT FROM UPLOADED DOCUMENT" in enhanced_prompt:
+                            # Document text is included - AI should analyze it
+                            enhanced_prompt = f"{enhanced_prompt}\n\n[Note: Please provide a detailed analysis of the document content, summarizing the main points and key information.]"
                     
                     if image_data_list:
                         # Add guidance to ensure detailed visual analysis while staying conversational
@@ -414,6 +435,8 @@ async def chat(
                             enhanced_prompt = "Please analyze the attached image(s) in detail and provide comprehensive information about all visual elements relevant to storytelling and story development."
                     
                     print(f"📝 [PROMPT] Enhanced prompt (length: {len(enhanced_prompt)} chars)")
+                    if has_document_context:
+                        print(f"📄 [PROMPT] Document content included in prompt")
                     if image_data_list:
                         print(f"🖼️ [PROMPT] Images included in single model call with full context")
                     
