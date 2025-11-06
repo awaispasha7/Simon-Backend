@@ -420,11 +420,12 @@ async def chat(
                     # 1. Document is already in prompt (no need for RAG)
                     # 2. Query is too short/simple (likely doesn't need RAG)
                     # 3. No conversation history (new conversation, likely simple query)
+                    query_text = (chat_request.text or "").strip()
                     should_use_rag = (
                         rag_service and 
                         not has_document_context and
-                        len(chat_request.text.strip()) > 50 and  # Only for longer queries
-                        len(conversation_history) > 2  # Only if there's conversation context
+                        len(query_text) > 50 and  # Only for longer queries
+                        len(conversation_history or []) > 2  # Only if there's conversation context
                     )
                     
                     if should_use_rag:
