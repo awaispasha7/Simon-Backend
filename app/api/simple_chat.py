@@ -154,19 +154,32 @@ async def chat(
             asyncio.create_task(store_embedding_background())
         
         # Get conversation history (with very short timeout to avoid blocking)
-        # CRITICAL: Reduce timeout to 0.5s and limit to 5 messages to prevent timeout
+        # CRITICAL: Skip conversation history when document is present to save time
         conversation_history = []
-        try:
-            conversation_history = await asyncio.wait_for(
-                _get_conversation_history(str(session_id), str(user_id), limit=5),
-                timeout=0.5  # Max 0.5 seconds for history (critical for preventing timeout)
-            )
-        except asyncio.TimeoutError:
-            print("[WARNING] Conversation history fetch timed out - continuing without it")
-            conversation_history = []  # Use empty history if timeout
-        except Exception as e:
-            print(f"[WARNING] Failed to get conversation history: {e}")
-            conversation_history = []  # Use empty history on error
+        
+        # Check if document is present - if so, skip history to save time
+        has_document = False
+        if chat_request.attached_files:
+            for f in chat_request.attached_files:
+                if f.get("extracted_text") and len(f.get("extracted_text", "")) > 0:
+                    has_document = True
+                    break
+        
+        if not has_document:
+            # Only fetch history if no document (documents provide their own context)
+            try:
+                conversation_history = await asyncio.wait_for(
+                    _get_conversation_history(str(session_id), str(user_id), limit=3),  # Reduced to 3 messages
+                    timeout=0.3  # Max 0.3 seconds for history (critical for preventing timeout)
+                )
+            except asyncio.TimeoutError:
+                print("[WARNING] Conversation history fetch timed out - continuing without it")
+                conversation_history = []  # Use empty history if timeout
+            except Exception as e:
+                print(f"[WARNING] Failed to get conversation history: {e}")
+                conversation_history = []  # Use empty history on error
+        else:
+            print("[INFO] Skipping conversation history - document provides context")
         
         # Process attached image files for DIRECT sending to model (ChatGPT-style)
         image_data_list = []  # List of {"data": bytes, "mime_type": str, "filename": str}
@@ -267,10 +280,10 @@ async def chat(
                     
                     # Add extracted text to prompt if we have it
                     if extracted_text and extracted_text.strip():
-                        # CRITICAL: Limit to 4000 chars to prevent timeout (reduced from 8000)
+                        # CRITICAL: Limit to 3000 chars to prevent timeout (reduced from 4000)
                         # Large prompts cause AI generation to take 8-9 seconds, causing 10s timeout
-                        document_text_preview = extracted_text[:4000]
-                        if len(extracted_text) > 4000:
+                        document_text_preview = extracted_text[:3000]
+                        if len(extracted_text) > 3000:
                             document_text_preview += f"\n\n[Note: Document continues beyond this point. Total length: {len(extracted_text)} characters. This is a summary of the key content.]"
                         
                         # CRITICAL: Add clear instructions for the AI to use this document content
@@ -389,38 +402,15 @@ async def chat(
                 # Generate AI response
                 if AI_AVAILABLE and ai_manager:
                     # Check if document text was already added to the prompt BEFORE any heavy operations
-                    # If document is already in prompt, skip dossier and RAG to avoid timeout
+                    # If document is already in prompt, skip RAG to avoid timeout
                     has_document_context = (
                         "## IMPORTANT: USER HAS UPLOADED A DOCUMENT" in chat_request.text or
                         "## CONTENT FROM UPLOADED DOCUMENT" in chat_request.text or
                         "Document Content:" in chat_request.text
                     )
                     
-                    # Get or create dossier for this project (with timeout)
-                    # SKIP dossier when document is present - not needed and saves time
+                    # REMOVED: Dossier is not required for chat functionality - completely skip it
                     dossier_context = None
-                    if dossier_extractor and project_id and not has_document_context:
-                        try:
-                            from ..database.session_service_supabase import session_service
-                            # Get existing dossier with shorter timeout (run in thread pool)
-                            import concurrent.futures
-                            loop = asyncio.get_event_loop()
-                            with concurrent.futures.ThreadPoolExecutor() as executor:
-                                dossier = await asyncio.wait_for(
-                                    loop.run_in_executor(executor, session_service.get_dossier, UUID(project_id), UUID(user_id)),
-                                    timeout=1.0  # Reduced from 2s to 1s
-                                )
-                            if dossier and dossier.snapshot_json:
-                                dossier_context = dossier.snapshot_json
-                                print(f"[DOSSIER] Using existing dossier: {dossier.title}")
-                            else:
-                                print(f"[DOSSIER] No existing dossier found")
-                        except asyncio.TimeoutError:
-                            print("[WARNING] Dossier retrieval timed out - continuing without it")
-                        except Exception as e:
-                            print(f"[WARNING] Dossier retrieval error: {e}")
-                    elif has_document_context:
-                        print(f"[DOSSIER] Skipping dossier - document content already in prompt")
                     
                     # Get RAG context from uploaded documents (with timeout to avoid blocking)
                     # SKIP RAG if document is already in prompt - no need for it!
@@ -502,9 +492,9 @@ async def chat(
                                 rag_context=rag_context,  # RAG context from documents
                                 dossier_context=dossier_context,
                                 image_data=image_data_list,  # Images sent directly (ChatGPT-style)
-                                max_tokens=2000  # Reduce max tokens to speed up generation
+                                max_tokens=1500  # Reduce max tokens to speed up generation (reduced from 2000)
                             ),
-                            timeout=7.0  # Max 7 seconds for AI generation (leaves 3s buffer)
+                            timeout=6.0  # Max 6 seconds for AI generation (leaves 4s buffer for safety)
                         )
                         print(f"🤖 [AI] AI manager returned response")
                         print(f"🤖 [AI] Response keys: {list(ai_response.keys()) if isinstance(ai_response, dict) else 'Not a dict'}")
