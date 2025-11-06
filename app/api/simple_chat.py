@@ -95,6 +95,10 @@ async def chat(
     5. Stream response back to user
     """
     
+    # Early check for critical dependencies
+    if SimpleSessionManager is None:
+        raise HTTPException(status_code=500, detail="Session manager not available - check server logs")
+    
     # CRITICAL: Log the raw request data immediately
     print(f"🔵 [CHAT] Received chat request")
     print(f"🔵 [CHAT] Text: {chat_request.text[:100]}...")
