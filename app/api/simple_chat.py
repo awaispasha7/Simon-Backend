@@ -499,11 +499,14 @@ async def chat(
                         )
                         
                         # Wait with timeout and proper cancellation
-                        ai_response = await asyncio.wait_for(ai_task, timeout=4.0)  # Reduced to 4s
+                        # Use longer timeout for non-document queries (they're usually faster)
+                        timeout_seconds = 6.0 if has_document_context else 7.0  # 6s for docs, 7s for simple queries
+                        ai_response = await asyncio.wait_for(ai_task, timeout=timeout_seconds)
                         print(f"🤖 [AI] AI manager returned response")
                         print(f"🤖 [AI] Response keys: {list(ai_response.keys()) if isinstance(ai_response, dict) else 'Not a dict'}")
                     except asyncio.TimeoutError:
-                        print(f"❌ [AI] AI generation timed out after 4 seconds - cancelling and using fallback")
+                        timeout_used = 6.0 if has_document_context else 7.0
+                        print(f"❌ [AI] AI generation timed out after {timeout_used} seconds - cancelling and using fallback")
                         # Cancel the task if it's still running
                         if not ai_task.done():
                             ai_task.cancel()
