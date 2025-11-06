@@ -153,17 +153,20 @@ async def chat(
             # Don't await - let it run in background
             asyncio.create_task(store_embedding_background())
         
-        # Get conversation history (with shorter timeout to avoid blocking)
+        # Get conversation history (with very short timeout to avoid blocking)
+        # CRITICAL: Reduce timeout to 0.5s and limit to 5 messages to prevent timeout
         conversation_history = []
         try:
             conversation_history = await asyncio.wait_for(
-                _get_conversation_history(str(session_id), str(user_id)),
-                timeout=1.0  # Max 1 second for history (reduced from 2s)
+                _get_conversation_history(str(session_id), str(user_id), limit=5),
+                timeout=0.5  # Max 0.5 seconds for history (critical for preventing timeout)
             )
         except asyncio.TimeoutError:
             print("[WARNING] Conversation history fetch timed out - continuing without it")
+            conversation_history = []  # Use empty history if timeout
         except Exception as e:
             print(f"[WARNING] Failed to get conversation history: {e}")
+            conversation_history = []  # Use empty history on error
         
         # Process attached image files for DIRECT sending to model (ChatGPT-style)
         image_data_list = []  # List of {"data": bytes, "mime_type": str, "filename": str}
@@ -264,10 +267,11 @@ async def chat(
                     
                     # Add extracted text to prompt if we have it
                     if extracted_text and extracted_text.strip():
-                        # Limit to first 8000 chars to avoid token limits, but keep more than before
-                        document_text_preview = extracted_text[:8000]
-                        if len(extracted_text) > 8000:
-                            document_text_preview += f"\n\n[Note: Document continues beyond this point. Total length: {len(extracted_text)} characters.]"
+                        # CRITICAL: Limit to 4000 chars to prevent timeout (reduced from 8000)
+                        # Large prompts cause AI generation to take 8-9 seconds, causing 10s timeout
+                        document_text_preview = extracted_text[:4000]
+                        if len(extracted_text) > 4000:
+                            document_text_preview += f"\n\n[Note: Document continues beyond this point. Total length: {len(extracted_text)} characters. This is a summary of the key content.]"
                         
                         # CRITICAL: Add clear instructions for the AI to use this document content
                         document_context_text = f"\n\n## IMPORTANT: USER HAS UPLOADED A DOCUMENT\n\n### Document Name: {file_name}\n\n### Document Content:\n{document_text_preview}\n\n### Instructions:\nThe user is asking about the contents of this document. You MUST analyze and summarize the document content above. Do NOT say you cannot process documents or that you didn't receive a proper response. The document content is provided above - use it to answer the user's question.\n"
@@ -486,16 +490,21 @@ async def chat(
                     
                     # Use AI manager for response generation with RAG and dossier context
                     # SINGLE CALL: Images + conversation history + RAG context all together
+                    # CRITICAL: Add timeout to AI call to prevent hanging
                     try:
-                        ai_response = await ai_manager.generate_response(
-                            task_type=TaskType.CHAT,
-                            prompt=enhanced_prompt,
-                            conversation_history=conversation_history,  # Full conversation history
-                            user_id=user_id,
-                            project_id=project_id,
-                            rag_context=rag_context,  # RAG context from documents
-                            dossier_context=dossier_context,
-                            image_data=image_data_list  # Images sent directly (ChatGPT-style)
+                        ai_response = await asyncio.wait_for(
+                            ai_manager.generate_response(
+                                task_type=TaskType.CHAT,
+                                prompt=enhanced_prompt,
+                                conversation_history=conversation_history,  # Limited conversation history
+                                user_id=user_id,
+                                project_id=project_id,
+                                rag_context=rag_context,  # RAG context from documents
+                                dossier_context=dossier_context,
+                                image_data=image_data_list,  # Images sent directly (ChatGPT-style)
+                                max_tokens=2000  # Reduce max tokens to speed up generation
+                            ),
+                            timeout=7.0  # Max 7 seconds for AI generation (leaves 3s buffer)
                         )
                         print(f"🤖 [AI] AI manager returned response")
                         print(f"🤖 [AI] Response keys: {list(ai_response.keys()) if isinstance(ai_response, dict) else 'Not a dict'}")
