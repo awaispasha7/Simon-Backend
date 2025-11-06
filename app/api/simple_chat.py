@@ -241,6 +241,8 @@ async def chat(
                     # SECOND: If not available, try to download from URL (only if URL is valid and not local://)
                     if not extracted_text and file_url and file_url.strip() and not file_url.startswith("local://"):
                         try:
+                            if not requests:
+                                raise ImportError("requests library not available")
                             print(f"📄 [DOCUMENT] Attempting to download from URL: {file_url[:100]}...")
                             response = requests.get(file_url, timeout=30)
                             
@@ -314,6 +316,8 @@ async def chat(
                     print(f"🖼️ [IMAGE] Image URL: {file_url[:100]}...")
                     
                     try:
+                        if not requests:
+                            raise ImportError("requests library not available")
                         print(f"🖼️ [IMAGE] Downloading image from URL...")
                         response = requests.get(file_url, timeout=30)
                         
