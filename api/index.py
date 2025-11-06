@@ -1,5 +1,5 @@
 """
-Vercel entry point - Full backend functionality
+Vercel entry point - Start minimal, add routes carefully
 """
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,55 +38,35 @@ async def options_handler(request: Request):
         }
     )
 
-# Load routes
+# Load routes one by one - if any fail, continue with others
 try:
     from app.api import auth
     app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
+    print("[OK] Auth router loaded")
 except Exception as e:
     print(f"[ERROR] Auth router failed: {type(e).__name__}: {e}")
+    # Create fallback login endpoint
     @app.post("/api/v1/auth/login")
     async def fallback_login():
         return JSONResponse(
             status_code=500,
-            content={"detail": f"Auth router failed to load: {str(e)}"},
+            content={"detail": "Auth router not available"},
             headers={"Access-Control-Allow-Origin": "*"}
         )
 
 try:
     from app.api import simple_session_manager
     app.include_router(simple_session_manager.router, prefix="/api/v1", tags=["session"])
+    print("[OK] Session router loaded")
 except Exception as e:
     print(f"[ERROR] Session router failed: {type(e).__name__}: {e}")
 
 try:
     from app.api import simple_chat
     app.include_router(simple_chat.router, prefix="/api/v1", tags=["chat"])
+    print("[OK] Chat router loaded")
 except Exception as e:
     print(f"[ERROR] Chat router failed: {type(e).__name__}: {e}")
-
-try:
-    from app.api import upload
-    app.include_router(upload.router, prefix="/api/v1", tags=["upload"])
-except Exception as e:
-    print(f"[ERROR] Upload router failed: {type(e).__name__}: {e}")
-
-try:
-    from app.api import transcribe
-    app.include_router(transcribe.router, prefix="/api/v1", tags=["transcribe"])
-except Exception as e:
-    print(f"[ERROR] Transcribe router failed: {type(e).__name__}: {e}")
-
-try:
-    from app.api import dossier
-    app.include_router(dossier.router, prefix="/api/v1", tags=["dossier"])
-except Exception as e:
-    print(f"[ERROR] Dossier router failed: {type(e).__name__}: {e}")
-
-try:
-    from app.api import coach_tools
-    app.include_router(coach_tools.router, prefix="/api/v1/coach", tags=["coach"])
-except Exception as e:
-    print(f"[ERROR] Coach tools router failed: {type(e).__name__}: {e}")
 
 # Export handler for Vercel
 handler = app
