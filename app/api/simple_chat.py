@@ -512,10 +512,17 @@ async def chat(
                                 await ai_task
                             except asyncio.CancelledError:
                                 pass
-                        ai_response = {
-                            "response": "I'm processing your request, but it's taking longer than expected. The document content is being analyzed. Please try asking a more specific question or try again in a moment.",
-                            "model_used": "timeout_fallback"
-                        }
+                        # Provide a helpful fallback response instead of empty
+                        if has_document_context:
+                            ai_response = {
+                                "response": "I'm processing your request, but it's taking longer than expected. The document content is being analyzed. Please try asking a more specific question or try again in a moment.",
+                                "model_used": "timeout_fallback"
+                            }
+                        else:
+                            ai_response = {
+                                "response": "I'm processing your request, but it's taking longer than expected. Please try again in a moment or rephrase your question.",
+                                "model_used": "timeout_fallback"
+                            }
                     except Exception as ai_error:
                         print(f"❌ [AI] Error calling AI manager: {ai_error}")
                         import traceback
@@ -603,9 +610,14 @@ async def chat(
                                 # Last resort: send the whole response as one chunk
                                 sentence_chunks = [full_response] if full_response.strip() else ["I'm sorry, I couldn't generate a response."]
                     
-                    # Ensure we have at least one chunk
+                    # Ensure we have at least one chunk - CRITICAL: Never send empty response
                     if not sentence_chunks:
-                        sentence_chunks = [full_response] if full_response.strip() else ["I'm sorry, I couldn't generate a response."]
+                        if full_response and full_response.strip():
+                            sentence_chunks = [full_response]
+                        else:
+                            # Last resort fallback - ensure we always send something
+                            sentence_chunks = ["I'm processing your request. Please try again if this message appears."]
+                            print("[CHAT] CRITICAL: No chunks and empty response - using fallback")
                     
                     print(f"[CHAT] Streaming {len(sentence_chunks)} chunks")
                     
