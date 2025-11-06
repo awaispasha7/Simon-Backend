@@ -103,41 +103,54 @@ async def chat(
                 print(traceback.format_exc())
                 # Continue with creating new message even if deletion fails
         
-        # Save user message
-        user_message_id = await _save_message(
-            session_id=str(session_id),
-            user_id=str(user_id),
-            role="user",
-            content=chat_request.text,
-            metadata={
-                "is_authenticated": is_authenticated,
-                "attached_files": chat_request.attached_files or []
-            }
-        )
+        # Save user message (non-blocking - don't wait if it's slow)
+        user_message_id = None
+        try:
+            user_message_id = await _save_message(
+                session_id=str(session_id),
+                user_id=str(user_id),
+                role="user",
+                content=chat_request.text,
+                metadata={
+                    "is_authenticated": is_authenticated,
+                    "attached_files": chat_request.attached_files or []
+                }
+            )
+        except Exception as e:
+            print(f"[WARNING] Failed to save user message: {e}")
         
-        # Store user message embedding for RAG
+        # Store user message embedding for RAG (non-blocking - fire and forget)
         if rag_service and user_message_id:
-            try:
-                # For single-user personal assistant, always use the fixed user_id for RAG
-                # This matches the user_id used when ingesting documents (00000000-0000-0000-0000-000000000001)
-                rag_user_id = UUID("00000000-0000-0000-0000-000000000001")
-                print(f"📚 Using RAG user_id: {rag_user_id} (single-user personal assistant)")
-                
-                await rag_service.embed_and_store_message(
-                    message_id=UUID(user_message_id),
-                    user_id=rag_user_id,
-                    project_id=UUID(project_id) if project_id else None,
-                    session_id=UUID(session_id),
-                    content=chat_request.text,
-                    role="user",
-                    metadata={"is_authenticated": is_authenticated, "original_user_id": str(user_id), "session_id": str(session_id)}
-                )
-                print(f"📚 Stored user message embedding: {user_message_id}")
-            except Exception as e:
-                print(f"⚠️ Failed to store user message embedding: {e}")
+            # Run in background - don't block the response
+            async def store_embedding_background():
+                try:
+                    rag_user_id = UUID("00000000-0000-0000-0000-000000000001")
+                    await rag_service.embed_and_store_message(
+                        message_id=UUID(user_message_id),
+                        user_id=rag_user_id,
+                        project_id=UUID(project_id) if project_id else None,
+                        session_id=UUID(session_id),
+                        content=chat_request.text,
+                        role="user",
+                        metadata={"is_authenticated": is_authenticated, "original_user_id": str(user_id), "session_id": str(session_id)}
+                    )
+                except Exception as e:
+                    print(f"[WARNING] Failed to store embedding: {e}")
+            
+            # Don't await - let it run in background
+            asyncio.create_task(store_embedding_background())
         
-        # Get conversation history for context (moved outside generate_stream to fix scope issue)
-        conversation_history = await _get_conversation_history(str(session_id), str(user_id))
+        # Get conversation history (with timeout to avoid blocking)
+        conversation_history = []
+        try:
+            conversation_history = await asyncio.wait_for(
+                _get_conversation_history(str(session_id), str(user_id)),
+                timeout=2.0  # Max 2 seconds for history
+            )
+        except asyncio.TimeoutError:
+            print("[WARNING] Conversation history fetch timed out - continuing without it")
+        except Exception as e:
+            print(f"[WARNING] Failed to get conversation history: {e}")
         
         # Process attached image files for DIRECT sending to model (ChatGPT-style)
         image_data_list = []  # List of {"data": bytes, "mime_type": str, "filename": str}
@@ -309,46 +322,58 @@ async def chat(
         # Generate and stream AI response
         async def generate_stream():
             try:
+                # Send "thinking" message immediately to start streaming
+                thinking_chunk = {
+                    "type": "thinking",
+                    "content": "Thinking..."
+                }
+                yield f"data: {json.dumps(thinking_chunk)}\n\n"
+                
                 # Generate AI response
                 if AI_AVAILABLE and ai_manager:
-                    # Get or create dossier for this project
+                    # Get or create dossier for this project (with timeout)
                     dossier_context = None
                     if dossier_extractor and project_id:
                         try:
                             from ..database.session_service_supabase import session_service
-                            # Get existing dossier
-                            dossier = session_service.get_dossier(UUID(project_id), UUID(user_id))
+                            # Get existing dossier with timeout
+                            dossier = await asyncio.wait_for(
+                                asyncio.to_thread(session_service.get_dossier, UUID(project_id), UUID(user_id)),
+                                timeout=2.0
+                            )
                             if dossier and dossier.snapshot_json:
                                 dossier_context = dossier.snapshot_json
-                                print(f"📋 Using existing dossier: {dossier.title}")
+                                print(f"[DOSSIER] Using existing dossier: {dossier.title}")
                             else:
-                                print(f"📋 No existing dossier found for project {project_id}")
+                                print(f"[DOSSIER] No existing dossier found")
+                        except asyncio.TimeoutError:
+                            print("[WARNING] Dossier retrieval timed out - continuing without it")
                         except Exception as e:
-                            print(f"⚠️ Dossier retrieval error: {e}")
+                            print(f"[WARNING] Dossier retrieval error: {e}")
                     
-                    # Get RAG context from uploaded documents
-                    # IMPORTANT: Use project_id to limit search to current project only
-                    # Each project = separate story with isolated context
-                    # Stories should be isolated - no cross-project character references
+                    # Get RAG context from uploaded documents (with timeout to avoid blocking)
                     rag_context = None
                     if rag_service:
                         try:
-                            # For single-user personal assistant, always use the fixed user_id for RAG
-                            # This ensures we search across all ingested documents (290 chunks from 26 PDFs)
                             rag_user_id = UUID("00000000-0000-0000-0000-000000000001")
-                            print(f"🔍 Getting RAG context for user: {rag_user_id} (searching across all projects)")
+                            print(f"[RAG] Getting RAG context (with 3s timeout)")
                             
-                            # For personal assistant, search across ALL projects to maximize context
-                            # All ingested documents should be available for any query
-                            rag_context = await rag_service.get_rag_context(
-                                user_message=chat_request.text,
-                                user_id=rag_user_id,
-                                project_id=None,  # Search across all projects for personal assistant
-                                conversation_history=conversation_history
+                            # Use timeout to prevent blocking - max 3 seconds
+                            rag_context = await asyncio.wait_for(
+                                rag_service.get_rag_context(
+                                    user_message=chat_request.text,
+                                    user_id=rag_user_id,
+                                    project_id=None,
+                                    conversation_history=conversation_history
+                                ),
+                                timeout=3.0
                             )
-                            print(f"📚 RAG context retrieved: {rag_context.get('user_context_count', 0)} user messages, {rag_context.get('document_context_count', 0)} document chunks")
+                            print(f"[RAG] Context retrieved: {rag_context.get('user_context_count', 0)} messages, {rag_context.get('document_context_count', 0)} chunks")
+                        except asyncio.TimeoutError:
+                            print("[WARNING] RAG context fetch timed out - continuing without it")
+                            rag_context = None
                         except Exception as e:
-                            print(f"⚠️ RAG context error: {e}")
+                            print(f"[WARNING] RAG context error: {e}")
                             rag_context = None
                     
                     # Enhance user prompt when images are present to ensure detailed analysis
