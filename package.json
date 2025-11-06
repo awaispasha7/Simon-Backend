@@ -1,0 +1,9 @@
+{
+  "name": "simon-backend",
+  "version": "1.0.0",
+  "description": "Simon Chatbot Backend",
+  "engines": {
+    "python": "3.11"
+  }
+}
+
