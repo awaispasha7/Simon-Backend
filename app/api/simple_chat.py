@@ -411,37 +411,20 @@ async def chat(
                     # REMOVED: Dossier is not required for chat functionality - completely skip it
                     dossier_context = None
                     
-                    # Get RAG context from uploaded documents (with timeout to avoid blocking)
-                    # SKIP RAG if document is already in prompt - no need for it!
+                    # CRITICAL FIX: Skip RAG entirely to prevent timeout - it's blocking the AI call
+                    # RAG is taking too long (384 embeddings) and causing the function to timeout
+                    # For now, skip RAG completely - conversation history is sufficient
                     rag_context = None
-                    if rag_service and not has_document_context:
-                        try:
-                            rag_user_id = UUID("00000000-0000-0000-0000-000000000001")
-                            print(f"[RAG] Getting RAG context (with 1s timeout)")
-                            
-                            # Use shorter timeout to prevent blocking - max 1 second
-                            rag_context = await asyncio.wait_for(
-                                rag_service.get_rag_context(
-                                    user_message=chat_request.text,
-                                    user_id=rag_user_id,
-                                    project_id=None,
-                                    conversation_history=conversation_history
-                                ),
-                                timeout=1.0
-                            )
-                            print(f"[RAG] Context retrieved: {rag_context.get('user_context_count', 0)} messages, {rag_context.get('document_context_count', 0)} chunks")
-                        except asyncio.TimeoutError:
-                            print("[WARNING] RAG context fetch timed out - continuing without it")
-                            rag_context = None
-                        except Exception as e:
-                            print(f"[WARNING] RAG context error: {e}")
-                            rag_context = None
-                    elif has_document_context:
-                        print(f"[RAG] Skipping RAG - document content already in prompt")
+                    print(f"[RAG] SKIPPING RAG to prevent timeout - using conversation history only")
                     
                     # Enhance user prompt - include document context and image guidance
                     # Model will see images + conversation history + RAG context + document text in single call
                     enhanced_prompt = chat_request.text
+                    
+                    print(f"🤖 [AI] About to call AI manager with prompt length: {len(enhanced_prompt)}")
+                    print(f"🤖 [AI] Conversation history: {len(conversation_history)} messages")
+                    print(f"🤖 [AI] Has document context: {has_document_context}")
+                    print(f"🤖 [AI] Has images: {len(image_data_list) > 0}")
                     
                     # Add guidance for document analysis if document is present
                     if has_document_context and not image_data_list:
@@ -480,8 +463,10 @@ async def chat(
                     # Use AI manager for response generation with RAG and dossier context
                     # CRITICAL: Use asyncio.wait_for with proper cancellation to prevent timeout
                     # Also reduce max_tokens and add aggressive timeout
+                    print(f"🤖 [AI] Starting AI generation task...")
                     try:
                         # Create a task that can be cancelled
+                        print(f"🤖 [AI] Creating AI task...")
                         ai_task = asyncio.create_task(
                             ai_manager.generate_response(
                                 task_type=TaskType.CHAT,
@@ -495,10 +480,12 @@ async def chat(
                                 max_tokens=2000  # Restored to reasonable value for proper responses
                             )
                         )
+                        print(f"🤖 [AI] AI task created, waiting with timeout...")
                         
                         # Wait with timeout and proper cancellation
                         # Use longer timeout for non-document queries (they're usually faster)
                         timeout_seconds = 8.0 if has_document_context else 8.5  # 8s for docs, 8.5s for simple queries
+                        print(f"🤖 [AI] Waiting for AI response (timeout: {timeout_seconds}s)...")
                         ai_response = await asyncio.wait_for(ai_task, timeout=timeout_seconds)
                         print(f"🤖 [AI] AI manager returned response")
                         print(f"🤖 [AI] Response keys: {list(ai_response.keys()) if isinstance(ai_response, dict) else 'Not a dict'}")
