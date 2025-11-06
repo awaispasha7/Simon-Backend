@@ -153,12 +153,12 @@ async def chat(
             # Don't await - let it run in background
             asyncio.create_task(store_embedding_background())
         
-        # Get conversation history (with timeout to avoid blocking)
+        # Get conversation history (with shorter timeout to avoid blocking)
         conversation_history = []
         try:
             conversation_history = await asyncio.wait_for(
                 _get_conversation_history(str(session_id), str(user_id)),
-                timeout=2.0  # Max 2 seconds for history
+                timeout=1.0  # Max 1 second for history (reduced from 2s)
             )
         except asyncio.TimeoutError:
             print("[WARNING] Conversation history fetch timed out - continuing without it")
@@ -384,18 +384,27 @@ async def chat(
                 
                 # Generate AI response
                 if AI_AVAILABLE and ai_manager:
+                    # Check if document text was already added to the prompt BEFORE any heavy operations
+                    # If document is already in prompt, skip dossier and RAG to avoid timeout
+                    has_document_context = (
+                        "## IMPORTANT: USER HAS UPLOADED A DOCUMENT" in chat_request.text or
+                        "## CONTENT FROM UPLOADED DOCUMENT" in chat_request.text or
+                        "Document Content:" in chat_request.text
+                    )
+                    
                     # Get or create dossier for this project (with timeout)
+                    # SKIP dossier when document is present - not needed and saves time
                     dossier_context = None
-                    if dossier_extractor and project_id:
+                    if dossier_extractor and project_id and not has_document_context:
                         try:
                             from ..database.session_service_supabase import session_service
-                            # Get existing dossier with timeout (run in thread pool)
+                            # Get existing dossier with shorter timeout (run in thread pool)
                             import concurrent.futures
                             loop = asyncio.get_event_loop()
                             with concurrent.futures.ThreadPoolExecutor() as executor:
                                 dossier = await asyncio.wait_for(
                                     loop.run_in_executor(executor, session_service.get_dossier, UUID(project_id), UUID(user_id)),
-                                    timeout=2.0
+                                    timeout=1.0  # Reduced from 2s to 1s
                                 )
                             if dossier and dossier.snapshot_json:
                                 dossier_context = dossier.snapshot_json
@@ -406,14 +415,8 @@ async def chat(
                             print("[WARNING] Dossier retrieval timed out - continuing without it")
                         except Exception as e:
                             print(f"[WARNING] Dossier retrieval error: {e}")
-                    
-                    # Check if document text was already added to the prompt BEFORE RAG
-                    # If document is already in prompt, skip RAG to avoid timeout
-                    has_document_context = (
-                        "## IMPORTANT: USER HAS UPLOADED A DOCUMENT" in chat_request.text or
-                        "## CONTENT FROM UPLOADED DOCUMENT" in chat_request.text or
-                        "Document Content:" in chat_request.text
-                    )
+                    elif has_document_context:
+                        print(f"[DOSSIER] Skipping dossier - document content already in prompt")
                     
                     # Get RAG context from uploaded documents (with timeout to avoid blocking)
                     # SKIP RAG if document is already in prompt - no need for it!
