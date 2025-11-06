@@ -280,11 +280,9 @@ async def chat(
                     
                     # Add extracted text to prompt if we have it
                     if extracted_text and extracted_text.strip():
-                        # CRITICAL: Limit to 1500 chars to prevent timeout (reduced from 2000)
-                        # OpenAI calls are taking 8-9 seconds even with smaller prompts
-                        # Extract first 1500 chars - focus on key content only
-                        document_text_preview = extracted_text[:1500]
-                        if len(extracted_text) > 1500:
+                        # Limit to 3000 chars - reasonable size for document processing
+                        document_text_preview = extracted_text[:3000]
+                        if len(extracted_text) > 3000:
                             document_text_preview += f"\n\n[Note: Document continues. Total: {len(extracted_text)} chars. Summarize key points from above.]"
                         
                         # CRITICAL: Add clear instructions for the AI to use this document content
@@ -494,18 +492,18 @@ async def chat(
                                 rag_context=rag_context,
                                 dossier_context=dossier_context,
                                 image_data=image_data_list,
-                                max_tokens=800  # Aggressively reduced to speed up (was 1000)
+                                max_tokens=2000  # Restored to reasonable value for proper responses
                             )
                         )
                         
                         # Wait with timeout and proper cancellation
                         # Use longer timeout for non-document queries (they're usually faster)
-                        timeout_seconds = 6.0 if has_document_context else 7.0  # 6s for docs, 7s for simple queries
+                        timeout_seconds = 8.0 if has_document_context else 8.5  # 8s for docs, 8.5s for simple queries
                         ai_response = await asyncio.wait_for(ai_task, timeout=timeout_seconds)
                         print(f"🤖 [AI] AI manager returned response")
                         print(f"🤖 [AI] Response keys: {list(ai_response.keys()) if isinstance(ai_response, dict) else 'Not a dict'}")
                     except asyncio.TimeoutError:
-                        timeout_used = 6.0 if has_document_context else 7.0
+                        timeout_used = 8.0 if has_document_context else 8.5
                         print(f"❌ [AI] AI generation timed out after {timeout_used} seconds - cancelling and using fallback")
                         # Cancel the task if it's still running
                         if not ai_task.done():
