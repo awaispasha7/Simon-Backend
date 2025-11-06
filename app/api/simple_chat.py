@@ -13,6 +13,13 @@ import os
 import re
 from datetime import datetime, timezone
 
+# Try to import requests for image downloading
+try:
+    import requests
+except ImportError:
+    requests = None
+    print("Warning: requests library not available - image downloading will fail")
+
 from ..models import ChatRequest
 from .simple_session_manager import SimpleSessionManager
 from ..database.supabase import get_supabase_client
