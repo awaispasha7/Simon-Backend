@@ -10,8 +10,25 @@ from dotenv import load_dotenv
 try:
     from app.ai.document_processor import document_processor
     DOCUMENT_PROCESSOR_AVAILABLE = True
+    print(f"[UPLOAD] Document processor imported successfully")
+    
+    # Check if dependencies are available
+    try:
+        import PyPDF2
+        print(f"[UPLOAD] PyPDF2 is available")
+    except ImportError:
+        print(f"[UPLOAD] WARNING: PyPDF2 is NOT installed - PDF processing will fail")
+    
+    try:
+        import docx
+        print(f"[UPLOAD] python-docx is available")
+    except ImportError:
+        print(f"[UPLOAD] WARNING: python-docx is NOT installed - DOCX processing will fail")
+        
 except Exception as e:
-    print(f"Warning: Document processor not available: {e}")
+    print(f"[UPLOAD] ERROR: Document processor not available: {e}")
+    import traceback
+    print(traceback.format_exc())
     DOCUMENT_PROCESSOR_AVAILABLE = False
     document_processor = None
 
@@ -265,22 +282,37 @@ async def upload_files(
                 
                 # Extract text from documents immediately for use in chat (even with Supabase)
                 extracted_text = None
-                if file_type in ['document', 'script'] and file_extension in ['pdf', 'docx', 'doc', 'txt'] and DOCUMENT_PROCESSOR_AVAILABLE:
-                    print(f"📄 Extracting text from document immediately (with Supabase): {file.filename}")
-                    try:
-                        extracted_text = await document_processor._extract_text(
-                            content,
-                            file.filename,
-                            file.content_type or 'application/pdf'
-                        )
-                        if extracted_text:
-                            print(f"✅ Extracted {len(extracted_text)} chars from {file.filename}")
-                        else:
-                            print(f"⚠️ No text extracted from {file.filename}")
-                    except Exception as extract_error:
-                        print(f"⚠️ Error extracting text: {extract_error}")
-                        import traceback
-                        print(traceback.format_exc())
+                if file_type in ['document', 'script'] and file_extension in ['pdf', 'docx', 'doc', 'txt']:
+                    if not DOCUMENT_PROCESSOR_AVAILABLE:
+                        print(f"❌ [UPLOAD] Document processor not available - cannot extract text from {file.filename}")
+                    elif not document_processor:
+                        print(f"❌ [UPLOAD] document_processor is None - cannot extract text from {file.filename}")
+                    else:
+                        print(f"📄 [UPLOAD] Extracting text from document immediately (with Supabase): {file.filename}")
+                        print(f"📄 [UPLOAD] File size: {len(content)} bytes, Type: {file.content_type}")
+                        try:
+                            extracted_text = await document_processor._extract_text(
+                                content,
+                                file.filename,
+                                file.content_type or 'application/pdf'
+                            )
+                            if extracted_text:
+                                # Check if extraction returned an error message (dependencies missing)
+                                if "not available" in extracted_text.lower() or "not installed" in extracted_text.lower():
+                                    print(f"❌ [UPLOAD] Dependencies missing: {extracted_text}")
+                                    extracted_text = None
+                                else:
+                                    print(f"✅ [UPLOAD] Extracted {len(extracted_text)} chars from {file.filename}")
+                                    print(f"✅ [UPLOAD] First 200 chars: {extracted_text[:200]}")
+                            else:
+                                print(f"⚠️ [UPLOAD] No text extracted from {file.filename} - extraction returned empty")
+                        except Exception as extract_error:
+                            print(f"❌ [UPLOAD] Error extracting text from {file.filename}: {extract_error}")
+                            import traceback
+                            print(f"❌ [UPLOAD] Traceback: {traceback.format_exc()}")
+                            extracted_text = None
+                else:
+                    print(f"ℹ️ [UPLOAD] Skipping text extraction - file_type={file_type}, extension={file_extension}, processor_available={DOCUMENT_PROCESSOR_AVAILABLE}")
                 
                 uploaded_file_data = {
                     "name": file.filename,

@@ -196,6 +196,9 @@ async def chat(
                     if extracted_text_from_upload:
                         extracted_text = extracted_text_from_upload
                         print(f"✅ [DOCUMENT] Using pre-extracted text from upload ({len(extracted_text)} chars)")
+                        print(f"✅ [DOCUMENT] First 200 chars: {extracted_text[:200]}")
+                    else:
+                        print(f"⚠️ [DOCUMENT] No extracted_text in attached_file - will try to download and extract")
                     
                     # SECOND: If not available, try to download from URL
                     if not extracted_text and file_url and not file_url.startswith("local://"):
