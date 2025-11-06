@@ -1,5 +1,5 @@
 """
-Vercel entry point - Step 2: Add real auth router with fixed imports
+Vercel entry point - Step 3: Add session routes
 """
 import sys
 import os
@@ -28,7 +28,7 @@ def read_root():
 def health():
     return {"status": "healthy"}
 
-# Step 2: Try to load auth router
+# Step 2: Auth router (already working)
 try:
     from app.api import auth
     app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
@@ -37,11 +37,13 @@ except Exception as e:
     print(f"[ERROR] Auth router failed: {type(e).__name__}: {e}")
     import traceback
     traceback.print_exc()
-    # Fallback endpoints
-    @app.post("/api/v1/auth/login")
-    def login():
-        return {"detail": "Auth router not available", "error": str(e)}
-    
-    @app.get("/api/v1/auth/me")
-    def get_me():
-        return {"user_id": "single_client", "username": "admin"}
+
+# Step 3: Session router
+try:
+    from app.api import simple_session_manager
+    app.include_router(simple_session_manager.router, prefix="/api/v1", tags=["session"])
+    print("[OK] Session router loaded")
+except Exception as e:
+    print(f"[ERROR] Session router failed: {type(e).__name__}: {e}")
+    import traceback
+    traceback.print_exc()
