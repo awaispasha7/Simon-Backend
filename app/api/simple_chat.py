@@ -3,8 +3,14 @@ Simplified Chat API
 Clean chat implementation using the simplified session manager
 """
 
-from fastapi import APIRouter, HTTPException, Header
-from fastapi.responses import StreamingResponse
+# Core FastAPI imports - these should always be available
+try:
+    from fastapi import APIRouter, HTTPException, Header
+    from fastapi.responses import StreamingResponse
+except ImportError as e:
+    print(f"CRITICAL: FastAPI not available: {e}")
+    raise
+
 from typing import Optional, List, Dict
 from uuid import UUID, uuid4
 import json
@@ -20,9 +26,38 @@ except ImportError:
     requests = None
     print("Warning: requests library not available - image downloading will fail")
 
-from ..models import ChatRequest
-from .simple_session_manager import SimpleSessionManager
-from ..database.supabase import get_supabase_client
+# Defensive imports for app modules
+try:
+    from ..models import ChatRequest
+except Exception as e:
+    print(f"ERROR: Failed to import ChatRequest: {e}")
+    import traceback
+    traceback.print_exc()
+    # Create a minimal fallback
+    from pydantic import BaseModel
+    class ChatRequest(BaseModel):
+        text: str
+        session_id: Optional[str] = None
+        project_id: Optional[UUID] = None
+        attached_files: Optional[List[Dict]] = None
+        edit_from_message_id: Optional[str] = None
+
+try:
+    from .simple_session_manager import SimpleSessionManager
+except Exception as e:
+    print(f"ERROR: Failed to import SimpleSessionManager: {e}")
+    import traceback
+    traceback.print_exc()
+    SimpleSessionManager = None
+
+try:
+    from ..database.supabase import get_supabase_client
+except Exception as e:
+    print(f"ERROR: Failed to import get_supabase_client: {e}")
+    import traceback
+    traceback.print_exc()
+    def get_supabase_client():
+        return None
 
 # Try to import AI components
 try:
@@ -32,6 +67,8 @@ try:
     AI_AVAILABLE = True
 except Exception as e:
     print(f"Warning: AI components not available: {e}")
+    import traceback
+    traceback.print_exc()
     AI_AVAILABLE = False
     ai_manager = None
     TaskType = None
