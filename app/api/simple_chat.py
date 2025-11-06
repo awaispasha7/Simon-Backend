@@ -269,12 +269,18 @@ async def chat(
                         if len(extracted_text) > 8000:
                             document_text_preview += f"\n\n[Note: Document continues beyond this point. Total length: {len(extracted_text)} characters.]"
                         
-                        document_context_text = f"\n\n## CONTENT FROM UPLOADED DOCUMENT ({file_name}):\n{document_text_preview}\n"
+                        # CRITICAL: Add clear instructions for the AI to use this document content
+                        document_context_text = f"\n\n## IMPORTANT: USER HAS UPLOADED A DOCUMENT\n\n### Document Name: {file_name}\n\n### Document Content:\n{document_text_preview}\n\n### Instructions:\nThe user is asking about the contents of this document. You MUST analyze and summarize the document content above. Do NOT say you cannot process documents or that you didn't receive a proper response. The document content is provided above - use it to answer the user's question.\n"
                         chat_request.text = chat_request.text + document_context_text
                         print(f"✅ [DOCUMENT] Added {len(extracted_text)} chars from {file_name} to prompt (showing first {len(document_text_preview)} chars)")
                         print(f"✅ [DOCUMENT] Full prompt length after adding document: {len(chat_request.text)} chars")
+                        print(f"✅ [DOCUMENT] Prompt preview (last 500 chars): {chat_request.text[-500:]}")
                     else:
                         print(f"⚠️ [DOCUMENT] No text available for {file_name} - extraction may have failed")
+                        print(f"⚠️ [DOCUMENT] extracted_text value: {extracted_text}")
+                        print(f"⚠️ [DOCUMENT] extracted_text type: {type(extracted_text)}")
+                        print(f"⚠️ [DOCUMENT] extracted_text is None: {extracted_text is None}")
+                        print(f"⚠️ [DOCUMENT] extracted_text is empty string: {extracted_text == ''}")
                         # Still add a note so AI knows about the document
                         document_note = f"\n\n## NOTE: User has attached a document file named '{file_name}'. The document content could not be extracted automatically. Please ask the user to provide key points or information from the document if needed."
                         chat_request.text = chat_request.text + document_note
