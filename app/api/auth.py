@@ -42,7 +42,7 @@ CLIENT_USERNAME = os.getenv("CLIENT_USERNAME", "admin")
 CLIENT_PASSWORD = os.getenv("CLIENT_PASSWORD", "admin123")
 
 # Debug: Print loaded credentials (remove in production)
-print(f"🔐 Auth loaded - CLIENT_USERNAME: {CLIENT_USERNAME}, CLIENT_PASSWORD: {'*' * len(CLIENT_PASSWORD) if CLIENT_PASSWORD else 'NOT SET'}")
+print(f"[AUTH] Auth loaded - CLIENT_USERNAME: {CLIENT_USERNAME}, CLIENT_PASSWORD: {'*' * len(CLIENT_PASSWORD) if CLIENT_PASSWORD else 'NOT SET'}")
 
 class LoginRequest(BaseModel):
     username: str

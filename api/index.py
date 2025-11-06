@@ -1,33 +1,45 @@
 """
-Vercel entry point - ultra-minimal to ensure it starts
+Ultra-minimal Vercel entry point - no emojis to avoid encoding issues
 """
 import sys
-import os
 import traceback
 
-# Add current directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+# Force output to stderr so Vercel captures it
+def log(msg):
+    print(msg, file=sys.stderr)
+    print(msg)
 
-print("=" * 60)
-print("Starting Vercel function...")
-print("=" * 60)
+log("=" * 60)
+log("Python process started")
+log("=" * 60)
+log(f"Python version: {sys.version}")
+log(f"Python path: {sys.path}")
 
 try:
-    from fastapi import FastAPI, Request
-    from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse
-    print("✅ FastAPI imports successful")
+    log("Importing FastAPI...")
+    from fastapi import FastAPI
+    log("[OK] FastAPI imported")
 except Exception as e:
-    print(f"❌ FastAPI import failed: {e}")
+    log(f"[ERROR] FastAPI import failed: {type(e).__name__}: {e}")
+    traceback.print_exc(file=sys.stderr)
     traceback.print_exc()
     sys.exit(1)
 
-# Create minimal app first
-app = FastAPI(title="Simon Chatbot")
-print("✅ FastAPI app created")
-
-# Add CORS
 try:
+    log("Creating FastAPI app...")
+    app = FastAPI(title="Simon Chatbot")
+    log("[OK] FastAPI app created")
+except Exception as e:
+    log(f"[ERROR] FastAPI app creation failed: {type(e).__name__}: {e}")
+    traceback.print_exc(file=sys.stderr)
+    traceback.print_exc()
+    sys.exit(1)
+
+try:
+    log("Adding CORS...")
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
+    from fastapi import Request
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -35,12 +47,12 @@ try:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    print("✅ CORS middleware added")
+    log("[OK] CORS added")
 except Exception as e:
-    print(f"⚠️ CORS middleware error: {e}")
+    log(f"[WARNING] CORS failed: {type(e).__name__}: {e}")
+    traceback.print_exc(file=sys.stderr)
     traceback.print_exc()
 
-# Basic endpoints
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "API running"}
@@ -49,7 +61,6 @@ async def root():
 async def health():
     return {"status": "healthy"}
 
-# OPTIONS handler for CORS
 @app.options("/{full_path:path}")
 async def options_handler(request: Request):
     return JSONResponse(
@@ -62,20 +73,24 @@ async def options_handler(request: Request):
         }
     )
 
-print("✅ Basic endpoints registered")
+log("[OK] Basic endpoints registered")
 
-# Now try to load routes - but don't fail if they don't load
-print("=" * 60)
-print("Loading routes...")
-print("=" * 60)
+# Try to import routes one by one
+log("=" * 60)
+log("Testing route imports...")
+log("=" * 60)
 
-# Load auth routes
+# Test auth import
 try:
+    log("Testing: from app.api import auth")
     from app.api import auth
+    log(f"[OK] Auth module imported: {auth}")
+    log(f"Auth router: {auth.router}")
     app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
-    print("✅ Auth router loaded")
+    log("[OK] Auth router included")
 except Exception as e:
-    print(f"❌ Auth router failed: {type(e).__name__}: {e}")
+    log(f"[ERROR] Auth import failed: {type(e).__name__}: {e}")
+    traceback.print_exc(file=sys.stderr)
     traceback.print_exc()
     # Create fallback login endpoint
     @app.post("/api/v1/auth/login")
@@ -88,25 +103,30 @@ except Exception as e:
 
 # Load session routes
 try:
+    log("Testing: from app.api import simple_session_manager")
     from app.api import simple_session_manager
     app.include_router(simple_session_manager.router, prefix="/api/v1", tags=["session"])
-    print("✅ Session router loaded")
+    log("[OK] Session router included")
 except Exception as e:
-    print(f"❌ Session router failed: {type(e).__name__}: {e}")
+    log(f"[ERROR] Session router failed: {type(e).__name__}: {e}")
+    traceback.print_exc(file=sys.stderr)
     traceback.print_exc()
 
 # Load chat routes
 try:
+    log("Testing: from app.api import simple_chat")
     from app.api import simple_chat
     app.include_router(simple_chat.router, prefix="/api/v1", tags=["chat"])
-    print("✅ Chat router loaded")
+    log("[OK] Chat router included")
 except Exception as e:
-    print(f"❌ Chat router failed: {type(e).__name__}: {e}")
+    log(f"[ERROR] Chat router failed: {type(e).__name__}: {e}")
+    traceback.print_exc(file=sys.stderr)
     traceback.print_exc()
 
-print("=" * 60)
-print(f"✅ App initialized with {len(app.routes)} routes")
-print("=" * 60)
+log("=" * 60)
+log(f"[OK] App ready with {len(app.routes)} routes")
+log("=" * 60)
 
-# Export for Vercel
+# Export handler
 handler = app
+log("[OK] Handler exported")
