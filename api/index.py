@@ -1,5 +1,5 @@
 """
-Vercel entry point - Step 4: Add chat routes
+Vercel entry point - Step 5: Add remaining routes (upload, transcribe, dossier, coach)
 """
 import sys
 import os
@@ -48,12 +48,52 @@ except Exception as e:
     import traceback
     traceback.print_exc()
 
-# Step 4: Chat router
+# Step 4: Chat router (already working)
 try:
     from app.api import simple_chat
     app.include_router(simple_chat.router, prefix="/api/v1", tags=["chat"])
     print("[OK] Chat router loaded")
 except Exception as e:
     print(f"[ERROR] Chat router failed: {type(e).__name__}: {e}")
+    import traceback
+    traceback.print_exc()
+
+# Step 5: Upload router
+try:
+    from app.api import upload
+    app.include_router(upload.router, prefix="/api/v1", tags=["upload"])
+    print("[OK] Upload router loaded")
+except Exception as e:
+    print(f"[ERROR] Upload router failed: {type(e).__name__}: {e}")
+    import traceback
+    traceback.print_exc()
+
+# Step 5: Transcribe router
+try:
+    from app.api import transcribe
+    app.include_router(transcribe.router, prefix="/api/v1", tags=["transcribe"])
+    print("[OK] Transcribe router loaded")
+except Exception as e:
+    print(f"[ERROR] Transcribe router failed: {type(e).__name__}: {e}")
+    import traceback
+    traceback.print_exc()
+
+# Step 5: Dossier router
+try:
+    from app.api import dossier
+    app.include_router(dossier.router, prefix="/api/v1", tags=["dossier"])
+    print("[OK] Dossier router loaded")
+except Exception as e:
+    print(f"[ERROR] Dossier router failed: {type(e).__name__}: {e}")
+    import traceback
+    traceback.print_exc()
+
+# Step 5: Coach tools router
+try:
+    from app.api import coach_tools
+    app.include_router(coach_tools.router, prefix="/api/v1/coach", tags=["coach"])
+    print("[OK] Coach tools router loaded")
+except Exception as e:
+    print(f"[ERROR] Coach tools router failed: {type(e).__name__}: {e}")
     import traceback
     traceback.print_exc()
