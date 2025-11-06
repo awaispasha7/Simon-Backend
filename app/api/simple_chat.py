@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 import json
 import asyncio
 import os
+import re
 from datetime import datetime, timezone
 
 from ..models import ChatRequest
@@ -413,7 +414,7 @@ async def chat(
                     full_response = ai_response.get("response", "I'm sorry, I couldn't generate a response.")
                     
                     # Clean markdown formatting: remove asterisks, bold symbols, etc.
-                    import re
+                    # (re is imported at top of file)
                     # Remove bold markdown (**text** or __text__)
                     full_response = re.sub(r'\*\*(.*?)\*\*', r'\1', full_response)
                     full_response = re.sub(r'__(.*?)__', r'\1', full_response)
@@ -440,20 +441,50 @@ async def chat(
                     }
                     yield f"data: {json.dumps(metadata_chunk)}\n\n"
                     
-                    # Stream the response word by word for better UX
-                    words = full_response.split()
-                    chunk_count = 0
+                    # Stream the response in sentence chunks for better performance
+                    # Split by sentences (period, exclamation, question mark) but keep the punctuation
+                    sentences = re.split(r'([.!?]\s+)', full_response)
+                    # Recombine sentences with their punctuation
+                    sentence_chunks = []
+                    for i in range(0, len(sentences) - 1, 2):
+                        if i + 1 < len(sentences):
+                            sentence_chunks.append(sentences[i] + sentences[i + 1])
+                        else:
+                            sentence_chunks.append(sentences[i])
+                    # Handle last sentence if odd number
+                    if len(sentences) % 2 == 1:
+                        sentence_chunks.append(sentences[-1])
                     
-                    for i, word in enumerate(words):
+                    # If no sentence breaks found, split by newlines or fallback to word chunks
+                    if len(sentence_chunks) <= 1:
+                        # Split by newlines first
+                        sentence_chunks = full_response.split('\n')
+                        if len(sentence_chunks) <= 1:
+                            # Fallback: split into chunks of ~20 words
+                            words = full_response.split()
+                            sentence_chunks = []
+                            chunk_size = 20
+                            for i in range(0, len(words), chunk_size):
+                                chunk = ' '.join(words[i:i + chunk_size])
+                                if i + chunk_size < len(words):
+                                    chunk += ' '
+                                sentence_chunks.append(chunk)
+                    
+                    chunk_count = 0
+                    total_chunks = len(sentence_chunks)
+                    
+                    for i, chunk in enumerate(sentence_chunks):
                         chunk_count += 1
                         chunk_data = {
                             "type": "content",
-                            "content": word + (" " if i < len(words) - 1 else ""),
+                            "content": chunk,
                             "chunk": chunk_count,
-                            "done": i == len(words) - 1
+                            "done": i == total_chunks - 1
                         }
                         yield f"data: {json.dumps(chunk_data)}\n\n"
-                        await asyncio.sleep(0.1)  # Small delay for streaming effect
+                        # Minimal delay - only 0.01s for smooth streaming without timeout
+                        if i < total_chunks - 1:  # No delay on last chunk
+                            await asyncio.sleep(0.01)
                     
                     # Save AI response
                     assistant_message_id = await _save_message(
@@ -641,18 +672,40 @@ async def chat(
                 print(f"Error in chat generation: {e}")
                 error_response = f"I apologize, but I'm having trouble generating a response right now. Please try again later."
                 
-                # Stream error response
-                words = error_response.split()
-                for i, word in enumerate(words):
+                # Stream error response in sentence chunks (same as success path)
+                sentences = re.split(r'([.!?]\s+)', error_response)
+                sentence_chunks = []
+                for i in range(0, len(sentences) - 1, 2):
+                    if i + 1 < len(sentences):
+                        sentence_chunks.append(sentences[i] + sentences[i + 1])
+                    else:
+                        sentence_chunks.append(sentences[i])
+                if len(sentences) % 2 == 1:
+                    sentence_chunks.append(sentences[-1])
+                
+                if len(sentence_chunks) <= 1:
+                    sentence_chunks = error_response.split('\n')
+                    if len(sentence_chunks) <= 1:
+                        words = error_response.split()
+                        sentence_chunks = []
+                        chunk_size = 20
+                        for i in range(0, len(words), chunk_size):
+                            chunk = ' '.join(words[i:i + chunk_size])
+                            if i + chunk_size < len(words):
+                                chunk += ' '
+                            sentence_chunks.append(chunk)
+                
+                for i, chunk in enumerate(sentence_chunks):
                     chunk_data = {
                         "type": "content",
-                        "content": word + (" " if i < len(words) - 1 else ""),
+                        "content": chunk,
                         "chunk": i + 1,
-                        "done": i == len(words) - 1,
+                        "done": i == len(sentence_chunks) - 1,
                         "error": True
                     }
                     yield f"data: {json.dumps(chunk_data)}\n\n"
-                    await asyncio.sleep(0.1)
+                    if i < len(sentence_chunks) - 1:
+                        await asyncio.sleep(0.01)
         
         return StreamingResponse(
             generate_stream(),
