@@ -22,7 +22,7 @@ except ImportError:
         JWT_AVAILABLE = True
     except ImportError:
         JWT_AVAILABLE = False
-        print("⚠️ WARNING: PyJWT not available. JWT functions will not work.")
+        print("[WARNING] PyJWT not available. JWT functions will not work.")
 
 # Load environment variables from .env file
 load_dotenv()
@@ -116,12 +116,12 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 async def login(request: LoginRequest):
     """Authenticate single client with username and password"""
     # Debug logging (remove in production)
-    print(f"🔐 Login attempt - Username: {request.username}, Password provided: {'Yes' if request.password else 'No'}")
-    print(f"🔐 Expected - Username: {CLIENT_USERNAME}, Password set: {'Yes' if CLIENT_PASSWORD else 'No'}")
+    print(f"[AUTH] Login attempt - Username: {request.username}, Password provided: {'Yes' if request.password else 'No'}")
+    print(f"[AUTH] Expected - Username: {CLIENT_USERNAME}, Password set: {'Yes' if CLIENT_PASSWORD else 'No'}")
     
     # Verify credentials against environment variables
     if request.username != CLIENT_USERNAME or request.password != CLIENT_PASSWORD:
-        print(f"❌ Login failed - Username match: {request.username == CLIENT_USERNAME}, Password match: {request.password == CLIENT_PASSWORD}")
+        print(f"[ERROR] Login failed - Username match: {request.username == CLIENT_USERNAME}, Password match: {request.password == CLIENT_PASSWORD}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password"
