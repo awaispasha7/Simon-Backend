@@ -8,10 +8,21 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import Optional
 from uuid import UUID
-import jwt
 from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
+
+# Import jwt with error handling
+try:
+    import jwt
+    JWT_AVAILABLE = True
+except ImportError:
+    try:
+        import PyJWT as jwt
+        JWT_AVAILABLE = True
+    except ImportError:
+        JWT_AVAILABLE = False
+        print("⚠️ WARNING: PyJWT not available. JWT functions will not work.")
 
 # Load environment variables from .env file
 load_dotenv()
@@ -44,6 +55,11 @@ class TokenResponse(BaseModel):
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create a JWT access token"""
+    if not JWT_AVAILABLE:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="JWT library not available"
+        )
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
@@ -56,6 +72,11 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     """Get the current authenticated user from JWT token"""
+    if not JWT_AVAILABLE:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="JWT library not available"
+        )
     try:
         payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("sub")
