@@ -966,8 +966,17 @@ async def chat(
                         except Exception as e:
                             print(f"⚠️ Failed to store fallback message embedding: {e}")
                 
-                # Update session last message time
-                await _update_session_activity(str(session_id))
+                # Update session last message time (non-blocking to prevent timeout)
+                async def update_session_background():
+                    try:
+                        await asyncio.wait_for(
+                            _update_session_activity(str(session_id)),
+                            timeout=1.0
+                        )
+                    except Exception as e:
+                        print(f"⚠️ Failed to update session activity: {e}")
+                
+                asyncio.create_task(update_session_background())
                 
             except Exception as e:
                 print(f"Error in chat generation: {e}")
