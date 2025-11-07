@@ -233,7 +233,13 @@ If document context is provided above, you MUST use it. This is not optional.
                         # Weaker instruction when no documents found
                         rag_context_text = f"\n\n## RELEVANT CONTEXT FROM PREVIOUS CONVERSATIONS:\n\n{rag_context.get('combined_context_text')}\n\n"
                     
-                    print(f"📚 Including RAG context: {rag_context.get('user_context_count', 0)} user messages, {doc_count} document chunks, {rag_context.get('global_context_count', 0)} global patterns")
+                    # Get all counts from metadata (they're nested there)
+                    user_count = metadata.get('user_context_count', 0) if isinstance(metadata, dict) else 0
+                    global_count = metadata.get('global_context_count', 0) if isinstance(metadata, dict) else 0
+                    print(f"📚 Including RAG context: {user_count} user messages, {doc_count} document chunks, {global_count} global patterns")
+                    print(f"📚 Combined context text length: {len(rag_context.get('combined_context_text', ''))} chars")
+                    if rag_context.get('combined_context_text'):
+                        print(f"📚 Combined context preview (first 300 chars): {rag_context.get('combined_context_text', '')[:300]}...")
                     if doc_count > 0:
                         print(f"✅ RAG has {doc_count} document chunks - AI MUST use this context for brand questions!")
                 else:
