@@ -111,14 +111,16 @@ class RAGService:
             # Step 4: Retrieve document context
             # For personal assistant: search across all projects to maximize context
             # For multi-user: can limit by project_id if provided
-            print(f"🔍 RAG: Calling get_document_context")
-            print(f"🔍 RAG: user_id={user_id} (type: {type(user_id)}, str: {str(user_id)})")
-            print(f"🔍 RAG: project_id={project_id} (type: {type(project_id)})")
-            print(f"🔍 RAG: query_embedding length={len(query_embedding) if query_embedding else 'None'}")
+            print(f"🔍 [RAG] Calling get_document_context")
+            print(f"🔍 [RAG] user_id={user_id} (type: {type(user_id)}, str: {str(user_id)})")
+            print(f"🔍 [RAG] project_id={project_id} (type: {type(project_id)})")
+            print(f"🔍 [RAG] query_embedding length={len(query_embedding) if query_embedding else 'None'}")
             
             # Use very low threshold (0.1) to ensure we find documents
             # Vector similarity scores can be lower than expected even for relevant content
+            document_context = []
             try:
+                print(f"🔍 [RAG] Starting document retrieval...")
                 document_context = await document_processor.get_document_context(
                     query_embedding=query_embedding,
                     user_id=user_id,
@@ -126,13 +128,14 @@ class RAGService:
                     match_count=10,  # Increase match count to get more results
                     similarity_threshold=0.1  # Low threshold to ensure retrieval
                 )
-                print(f"✅ RAG: Retrieved {len(document_context)} document chunks")
+                print(f"✅ [RAG] Retrieved {len(document_context)} document chunks")
                 if document_context:
-                    print(f"✅ RAG: First chunk preview: {document_context[0].get('chunk_text', '')[:200]}")
+                    print(f"✅ [RAG] First chunk preview: {document_context[0].get('chunk_text', '')[:200]}")
+                    print(f"✅ [RAG] Document chunks will be included in AI context")
                 else:
-                    print(f"⚠️ RAG: No document chunks retrieved - this might indicate an issue")
+                    print(f"⚠️ [RAG] No document chunks retrieved - check if documents match query or threshold is too high")
             except Exception as doc_error:
-                print(f"❌ RAG: Error retrieving document context: {doc_error}")
+                print(f"❌ [RAG] Error retrieving document context: {doc_error}")
                 import traceback
                 print(traceback.format_exc())
                 document_context = []
@@ -149,7 +152,11 @@ class RAGService:
                 "has_conversation_history": bool(conversation_history)
             }
             
-            print(f"RAG: Retrieved {len(user_context)} user contexts, {len(global_context)} global patterns, {len(document_context)} document chunks")
+            print(f"📊 [RAG] Final summary: {len(user_context)} user contexts, {len(global_context)} global patterns, {len(document_context)} document chunks")
+            if document_context:
+                print(f"✅ [RAG] SUCCESS: Document context will be included in AI prompt!")
+            else:
+                print(f"⚠️ [RAG] WARNING: No document context retrieved - AI won't have document information")
             
             return {
                 "user_context": user_context,
