@@ -88,25 +88,16 @@ class RAGService:
                 min_quality_score=0.6
             )
             
-            # Step 4: Debug - Check if there are any document embeddings for this user
+            # Step 4: Debug - Check if there are any document embeddings for this user (QUICK CHECK ONLY)
             try:
                 from app.database.supabase import get_supabase_client
                 supabase = get_supabase_client()
-                print(f"🔍 RAG Debug: Querying for user_id: {str(user_id)} (type: {type(user_id)})")
-                debug_result = supabase.table('document_embeddings').select('*').eq('user_id', str(user_id)).execute()
-                print(f"🔍 RAG Debug: Found {len(debug_result.data)} document embeddings for user {user_id}")
-                
-                # Also check all embeddings to see what's in the database
-                all_embeddings = supabase.table('document_embeddings').select('user_id, asset_id, project_id').execute()
-                print(f"🔍 RAG Debug: Total embeddings in database: {len(all_embeddings.data)}")
-                for row in all_embeddings.data:
-                    print(f"  - User: {row.get('user_id')}, Asset: {row.get('asset_id')}, Project: {row.get('project_id')}")
-                
-                if debug_result.data:
-                    for row in debug_result.data:
-                        print(f"  - Asset: {row.get('asset_id')}, Project: {row.get('project_id')}, Type: {row.get('document_type')}")
+                print(f"🔍 [RAG] Quick check: Querying for user_id: {str(user_id)}")
+                debug_result = supabase.table('document_embeddings').select('embedding_id', count='exact').eq('user_id', str(user_id)).limit(1).execute()
+                count = debug_result.count if hasattr(debug_result, 'count') else len(debug_result.data) if debug_result.data else 0
+                print(f"🔍 [RAG] Quick check: Found {count} document embeddings for user {user_id}")
             except Exception as e:
-                print(f"🔍 RAG Debug: Error checking embeddings: {e}")
+                print(f"🔍 [RAG] Quick check error: {e}")
             
             # Step 4: Retrieve document context
             # For personal assistant: search across all projects to maximize context

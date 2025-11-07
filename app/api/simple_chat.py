@@ -485,8 +485,9 @@ async def chat(
                             rag_user_id = UUID("00000000-0000-0000-0000-000000000001")
                             print(f"[RAG] Getting RAG context for query: '{query_text[:50]}...'")
                             
-                            # Increased timeout to 3 seconds - RAG is critical for document queries
+                            # Increased timeout to 5 seconds - RAG is critical for document queries
                             # Client needs reliable document retrieval for brand questions
+                            # Document retrieval can take time with 384 embeddings
                             rag_context = await asyncio.wait_for(
                                 rag_service.get_rag_context(
                                     user_message=chat_request.text,
@@ -494,7 +495,7 @@ async def chat(
                                     project_id=None,
                                     conversation_history=conversation_history
                                 ),
-                                timeout=3.0  # Increased from 0.5s to 3s for reliable retrieval
+                                timeout=5.0  # Increased to 5s to allow document retrieval to complete
                             )
                             print(f"[RAG] ✅ Context retrieved: {rag_context.get('user_context_count', 0)} messages, {rag_context.get('document_context_count', 0)} document chunks, {rag_context.get('global_context_count', 0)} global patterns")
                             
