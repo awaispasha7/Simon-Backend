@@ -737,28 +737,45 @@ async def chat(
                         if i < total_chunks - 1:  # No delay on last chunk
                             await asyncio.sleep(0.01)
                     
-                    # Save AI response
-                    assistant_message_id = await _save_message(
-                        session_id=str(session_id),
-                        user_id=str(user_id),
-                        role="assistant",
-                        content=full_response,
-                        metadata={"is_authenticated": is_authenticated}
-                    )
+                    # CRITICAL: Save AI response in background to prevent blocking stream completion
+                    # Stream must complete immediately after last chunk to avoid timeout
+                    assistant_message_id = None
+                    async def save_and_process_background():
+                        nonlocal assistant_message_id
+                        try:
+                            assistant_message_id = await asyncio.wait_for(
+                                _save_message(
+                                    session_id=str(session_id),
+                                    user_id=str(user_id),
+                                    role="assistant",
+                                    content=full_response,
+                                    metadata={"is_authenticated": is_authenticated}
+                                ),
+                                timeout=2.0
+                            )
+                            
+                            # Extract and store attachment analysis (non-blocking)
+                            if image_data_list and attachment_metadata:
+                                try:
+                                    await asyncio.wait_for(
+                                        _extract_and_store_attachment_analysis_from_response(
+                                            full_response=full_response,
+                                            image_data_list=image_data_list,
+                                            attachment_metadata=attachment_metadata,
+                                            conversation_history=conversation_history,
+                                            rag_context=rag_context,
+                                            project_id=project_id,
+                                            user_id=user_id
+                                        ),
+                                        timeout=3.0
+                                    )
+                                except Exception as e:
+                                    print(f"⚠️ Failed to extract attachment analysis: {e}")
+                        except Exception as e:
+                            print(f"⚠️ Failed to save assistant message: {e}")
                     
-                    # Extract and store attachment analysis from model's response
-                    # Model sees images directly + conversation history + RAG context in single call
-                    # Extract image analysis from the natural response
-                    if image_data_list and attachment_metadata:
-                        await _extract_and_store_attachment_analysis_from_response(
-                            full_response=full_response,
-                            image_data_list=image_data_list,
-                            attachment_metadata=attachment_metadata,
-                            conversation_history=conversation_history,
-                            rag_context=rag_context,
-                            project_id=project_id,
-                            user_id=user_id
-                        )
+                    # Start background task - don't await (stream completes immediately)
+                    asyncio.create_task(save_and_process_background())
                     
                     # Update dossier if needed (after both user and assistant messages are saved)
                     if dossier_extractor and project_id and len(conversation_history) >= 2:
@@ -835,28 +852,44 @@ async def chat(
                         except Exception as e:
                             print(f"⚠️ Dossier update error: {e}")
                     
-                    # Store message embeddings for RAG
-                    if rag_service and assistant_message_id:
-                        try:
-                            if is_authenticated:
-                                # For authenticated users, use their actual user_id
-                                rag_user_id = UUID(user_id)
-                            else:
-                                # For anonymous users, use the special anonymous user ID
-                                rag_user_id = UUID("00000000-0000-0000-0000-000000000000")
-                            
-                            await rag_service.embed_and_store_message(
-                                message_id=UUID(assistant_message_id),
-                                user_id=rag_user_id,
-                                project_id=UUID(project_id) if project_id else None,
-                                session_id=UUID(session_id),
-                                content=full_response,
-                                role="assistant",
-                                metadata={"is_authenticated": is_authenticated, "original_user_id": str(user_id), "session_id": str(session_id)}
-                            )
-                            print(f"📚 Stored assistant message embedding: {assistant_message_id}")
-                        except Exception as e:
-                            print(f"⚠️ Failed to store assistant message embedding: {e}")
+                    # Store message embeddings for RAG (non-blocking - wait for message_id)
+                    if rag_service:
+                        async def store_assistant_embedding():
+                            try:
+                                # Wait for assistant_message_id from background save task
+                                max_wait = 3
+                                waited = 0
+                                while assistant_message_id is None and waited < max_wait:
+                                    await asyncio.sleep(0.1)
+                                    waited += 0.1
+                                
+                                if assistant_message_id is None:
+                                    print(f"⚠️ [RAG] assistant_message_id not available, skipping embedding")
+                                    return
+                                
+                                if is_authenticated:
+                                    rag_user_id = UUID(user_id)
+                                else:
+                                    rag_user_id = UUID("00000000-0000-0000-0000-000000000000")
+                                
+                                await asyncio.wait_for(
+                                    rag_service.embed_and_store_message(
+                                        message_id=UUID(assistant_message_id),
+                                        user_id=rag_user_id,
+                                        project_id=UUID(project_id) if project_id else None,
+                                        session_id=UUID(session_id),
+                                        content=full_response,
+                                        role="assistant",
+                                        metadata={"is_authenticated": is_authenticated, "original_user_id": str(user_id), "session_id": str(session_id)}
+                                    ),
+                                    timeout=2.0
+                                )
+                                print(f"📚 Stored assistant message embedding: {assistant_message_id}")
+                            except Exception as e:
+                                print(f"⚠️ Failed to store assistant message embedding: {e}")
+                        
+                        # Don't await - run in background
+                        asyncio.create_task(store_assistant_embedding())
                     
                 else:
                     # Fallback response if AI is not available
