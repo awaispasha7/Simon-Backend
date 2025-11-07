@@ -201,7 +201,9 @@ class AIModelManager:
                 if rag_context.get("combined_context_text"):
                     # CRITICAL: Make the context VERY prominent and explicit for the AI
                     # Client needs bot to recognize brand documents (niche, tone, rules, etc.)
-                    doc_count = rag_context.get('document_context_count', 0)
+                    # Get document count from metadata (it's nested there)
+                    metadata = rag_context.get('metadata', {})
+                    doc_count = metadata.get('document_context_count', 0) if isinstance(metadata, dict) else 0
                     if doc_count > 0:
                         # Strong instruction when documents are found
                         rag_context_text = f"""

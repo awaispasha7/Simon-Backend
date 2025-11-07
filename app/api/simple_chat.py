@@ -497,14 +497,24 @@ async def chat(
                                 ),
                                 timeout=5.0  # Increased to 5s to allow document retrieval to complete
                             )
-                            print(f"[RAG] ✅ Context retrieved: {rag_context.get('user_context_count', 0)} messages, {rag_context.get('document_context_count', 0)} document chunks, {rag_context.get('global_context_count', 0)} global patterns")
+                            # Get counts from metadata (they're nested there)
+                            metadata = rag_context.get('metadata', {})
+                            user_count = metadata.get('user_context_count', 0) if isinstance(metadata, dict) else 0
+                            doc_count = metadata.get('document_context_count', 0) if isinstance(metadata, dict) else 0
+                            global_count = metadata.get('global_context_count', 0) if isinstance(metadata, dict) else 0
+                            
+                            print(f"[RAG] ✅ Context retrieved: {user_count} messages, {doc_count} document chunks, {global_count} global patterns")
                             
                             # Log document context details for debugging
-                            if rag_context.get('document_context_count', 0) > 0:
-                                print(f"[RAG] ✅ Found {rag_context.get('document_context_count')} document chunks - AI will use this!")
+                            if doc_count > 0:
+                                print(f"[RAG] ✅ Found {doc_count} document chunks - AI will use this!")
                                 doc_context = rag_context.get('document_context', [])
-                                for i, chunk in enumerate(doc_context[:3], 1):
-                                    print(f"[RAG]   Chunk {i}: {chunk.get('chunk_text', '')[:100]}...")
+                                if doc_context:
+                                    for i, chunk in enumerate(doc_context[:3], 1):
+                                        chunk_text = chunk.get('chunk_text', '') if isinstance(chunk, dict) else str(chunk)[:100]
+                                        print(f"[RAG]   Chunk {i}: {chunk_text[:100]}...")
+                                else:
+                                    print(f"[RAG] ⚠️ Warning: doc_count={doc_count} but document_context list is empty!")
                             else:
                                 print(f"[RAG] ⚠️ No document chunks found - check if documents are properly ingested")
                         except asyncio.TimeoutError:
