@@ -518,7 +518,7 @@ async def chat(
                             else:
                                 print(f"[RAG] ⚠️ No document chunks found - check if documents are properly ingested")
                         except asyncio.TimeoutError:
-                            print("[RAG] ⚠️ Timeout after 3s - continuing without RAG context")
+                            print("[RAG] ⚠️ Timeout after 5s - continuing without RAG context")
                             rag_context = None
                         except Exception as e:
                             print(f"[RAG] ❌ Error - skipping RAG: {e}")

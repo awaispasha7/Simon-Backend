@@ -144,8 +144,12 @@ class RAGService:
             }
             
             print(f"📊 [RAG] Final summary: {len(user_context)} user contexts, {len(global_context)} global patterns, {len(document_context)} document chunks")
+            print(f"📊 [RAG] Combined context text length: {len(combined_context_text)} chars")
+            if combined_context_text:
+                print(f"📊 [RAG] Combined context preview (first 300 chars): {combined_context_text[:300]}...")
             if document_context:
                 print(f"✅ [RAG] SUCCESS: Document context will be included in AI prompt!")
+                print(f"✅ [RAG] Document chunks in context: {len(document_context)}")
             else:
                 print(f"⚠️ [RAG] WARNING: No document context retrieved - AI won't have document information")
             
