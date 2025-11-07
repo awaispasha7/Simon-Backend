@@ -199,11 +199,41 @@ class AIModelManager:
             if rag_context:
                 # Include combined RAG context (user messages + documents + global knowledge)
                 if rag_context.get("combined_context_text"):
-                    # Make the context more prominent and clear for the AI
-                    rag_context_text = f"\n\n## IMPORTANT: RELEVANT CONTEXT FROM UPLOADED DOCUMENTS AND PREVIOUS CONVERSATIONS:\n\n{rag_context.get('combined_context_text')}\n\nIMPORTANT: When the user asks about documents, hooks, guidelines, or any information that might be in the context above, you MUST reference and use that context. Never say you don't have access to documents if context is provided above.\n"
-                    print(f"📚 Including RAG context: {rag_context.get('user_context_count', 0)} user messages, {rag_context.get('document_context_count', 0)} document chunks, {rag_context.get('global_context_count', 0)} global patterns")
-                    if rag_context.get('document_context_count', 0) > 0:
-                        print(f"✅ RAG has {rag_context.get('document_context_count')} document chunks - AI should use this context!")
+                    # CRITICAL: Make the context VERY prominent and explicit for the AI
+                    # Client needs bot to recognize brand documents (niche, tone, rules, etc.)
+                    doc_count = rag_context.get('document_context_count', 0)
+                    if doc_count > 0:
+                        # Strong instruction when documents are found
+                        rag_context_text = f"""
+
+## 🔴 CRITICAL: BRAND DOCUMENTS AND CONTEXT AVAILABLE
+
+The following information comes from the user's uploaded brand documents (North Star, ICP, storytelling rules, hook formulas, content pillars, etc.). You MUST use this information to answer ALL questions about:
+- Brand identity, niche, target audience
+- Tone, voice, and writing style
+- Content rules, hooks, CTAs, storytelling structure
+- Any brand-specific guidelines or preferences
+
+### DOCUMENT CONTEXT (USE THIS INFORMATION):
+{rag_context.get('combined_context_text')}
+
+### CRITICAL INSTRUCTIONS:
+1. When asked "Who is my niche?" or similar brand questions, answer DIRECTLY from the document context above
+2. When creating scripts, hooks, or CTAs, apply the rules and formulas from the documents
+3. When asked about tone, voice, or style, reference the specific guidelines in the documents
+4. NEVER say "I don't have access to your documents" - the context above IS from the documents
+5. If the answer isn't in the context, say "Based on your documents, I don't see specific information about [topic], but here's what I know from your brand guidelines..."
+
+If document context is provided above, you MUST use it. This is not optional.
+
+"""
+                    else:
+                        # Weaker instruction when no documents found
+                        rag_context_text = f"\n\n## RELEVANT CONTEXT FROM PREVIOUS CONVERSATIONS:\n\n{rag_context.get('combined_context_text')}\n\n"
+                    
+                    print(f"📚 Including RAG context: {rag_context.get('user_context_count', 0)} user messages, {doc_count} document chunks, {rag_context.get('global_context_count', 0)} global patterns")
+                    if doc_count > 0:
+                        print(f"✅ RAG has {doc_count} document chunks - AI MUST use this context for brand questions!")
                 else:
                     print(f"⚠️ RAG context present but no combined_context_text found")
                     print(f"⚠️ RAG metadata: {rag_context.get('metadata', {})}")

@@ -468,24 +468,25 @@ async def chat(
                     # Only use RAG for complex queries that might benefit from document context
                     rag_context = None
                     
-                    # Skip RAG if:
-                    # 1. Document is already in prompt (no need for RAG)
-                    # 2. Query is too short/simple (likely doesn't need RAG)
-                    # 3. No conversation history (new conversation, likely simple query)
+                    # CRITICAL FIX: Always use RAG for document-based queries
+                    # The client needs the bot to recognize document information (e.g., "Who is my niche?")
+                    # RAG should run for ALL queries to ensure document context is available
                     query_text = (chat_request.text or "").strip()
+                    
+                    # Always use RAG if available - don't skip based on query length or history
+                    # Documents are the core feature - we need RAG to work for all queries
                     should_use_rag = (
                         rag_service and 
-                        not has_document_context and
-                        len(query_text) > 50 and  # Only for longer queries
-                        len(conversation_history or []) > 2  # Only if there's conversation context
+                        not has_document_context  # Skip RAG only if document is already in prompt
                     )
                     
                     if should_use_rag:
                         try:
                             rag_user_id = UUID("00000000-0000-0000-0000-000000000001")
-                            print(f"[RAG] Getting RAG context (with 0.5s timeout - quick check only)")
+                            print(f"[RAG] Getting RAG context for query: '{query_text[:50]}...'")
                             
-                            # Use very short timeout - RAG is optional, don't let it block
+                            # Increased timeout to 3 seconds - RAG is critical for document queries
+                            # Client needs reliable document retrieval for brand questions
                             rag_context = await asyncio.wait_for(
                                 rag_service.get_rag_context(
                                     user_message=chat_request.text,
@@ -493,20 +494,31 @@ async def chat(
                                     project_id=None,
                                     conversation_history=conversation_history
                                 ),
-                                timeout=0.5  # Very short timeout - fail fast
+                                timeout=3.0  # Increased from 0.5s to 3s for reliable retrieval
                             )
-                            print(f"[RAG] Context retrieved: {rag_context.get('user_context_count', 0)} messages, {rag_context.get('document_context_count', 0)} chunks")
+                            print(f"[RAG] ✅ Context retrieved: {rag_context.get('user_context_count', 0)} messages, {rag_context.get('document_context_count', 0)} document chunks, {rag_context.get('global_context_count', 0)} global patterns")
+                            
+                            # Log document context details for debugging
+                            if rag_context.get('document_context_count', 0) > 0:
+                                print(f"[RAG] ✅ Found {rag_context.get('document_context_count')} document chunks - AI will use this!")
+                                doc_context = rag_context.get('document_context', [])
+                                for i, chunk in enumerate(doc_context[:3], 1):
+                                    print(f"[RAG]   Chunk {i}: {chunk.get('chunk_text', '')[:100]}...")
+                            else:
+                                print(f"[RAG] ⚠️ No document chunks found - check if documents are properly ingested")
                         except asyncio.TimeoutError:
-                            print("[RAG] Timeout - skipping RAG to save time")
+                            print("[RAG] ⚠️ Timeout after 3s - continuing without RAG context")
                             rag_context = None
                         except Exception as e:
-                            print(f"[RAG] Error - skipping RAG: {e}")
+                            print(f"[RAG] ❌ Error - skipping RAG: {e}")
+                            import traceback
+                            print(traceback.format_exc())
                             rag_context = None
                     else:
                         if has_document_context:
                             print(f"[RAG] Skipping RAG - document content already in prompt")
                         else:
-                            print(f"[RAG] Skipping RAG - simple query or no conversation history")
+                            print(f"[RAG] ⚠️ RAG service not available")
                     
                     # Enhance user prompt - include document context and image guidance
                     # Model will see images + conversation history + RAG context + document text in single call

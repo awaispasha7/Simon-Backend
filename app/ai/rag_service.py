@@ -198,17 +198,26 @@ class RAGService:
                 context_parts.append(f"{i}. [{role.upper()}] (relevance: {similarity:.2f}) {content[:200]}...")
             context_parts.append("")
         
-        # Add document context
+        # Add document context - CRITICAL: This is the brand documents (North Star, ICP, rules, etc.)
         if document_context:
-            context_parts.append("## Relevant Information from Your Uploaded Documents:")
-            context_parts.append("IMPORTANT: Use the information below from uploaded documents to answer user questions. Reference specific details when available.")
+            context_parts.append("## 🔴 BRAND DOCUMENTS - CRITICAL INFORMATION:")
+            context_parts.append("This section contains information from uploaded brand documents including:")
+            context_parts.append("- North Star / Brand Vision")
+            context_parts.append("- ICP (Ideal Customer Profile) / Target Audience")
+            context_parts.append("- Storytelling Rules & Guidelines")
+            context_parts.append("- Hook Formulas & Structures")
+            context_parts.append("- Content Pillars & Themes")
+            context_parts.append("- Tone, Voice, and Writing Style Guidelines")
+            context_parts.append("")
+            context_parts.append("USE THIS INFORMATION TO ANSWER ALL BRAND-RELATED QUESTIONS.")
+            context_parts.append("")
             for i, item in enumerate(document_context, 1):
                 doc_type = item.get('document_type', 'unknown')
                 chunk_text = item.get('chunk_text', '')
                 similarity = item.get('similarity', 0)
-                # Include more of the chunk text for better context (up to 500 chars)
+                # Include MORE chunk text for better context (up to 800 chars for brand docs)
                 context_parts.append(
-                    f"{i}. [{doc_type.upper()}] (relevance: {similarity:.2f})\n{chunk_text[:500]}"
+                    f"{i}. [{doc_type.upper()}] (relevance: {similarity:.2f})\n{chunk_text[:800]}"
                 )
             context_parts.append("")
         
