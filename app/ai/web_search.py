@@ -141,26 +141,75 @@ class WebSearchService:
     
     def format_search_results_for_context(self, search_results: Dict[str, Any]) -> str:
         """
-        Format search results as a string to include in LLM context
+        Format search results as a structured, readable string for LLM context
+        Similar to documentation/help article format
         
         Args:
             search_results: Results from search() method
             
         Returns:
-            Formatted string with search results
+            Formatted string with search results in structured format
         """
         if not search_results.get("success") or not search_results.get("results"):
             return ""
         
-        formatted = "\n## Web Search Results\n\n"
-        formatted += f"Query: {search_results.get('query', '')}\n\n"
+        results = search_results.get("results", [])
+        if not results:
+            return ""
         
-        for i, result in enumerate(search_results.get("results", []), 1):
-            formatted += f"### Result {i}: {result.get('title', 'No title')}\n"
-            formatted += f"URL: {result.get('url', '')}\n"
-            formatted += f"Content: {result.get('content', '')}\n\n"
+        formatted = "\n## Web Search Results\n\n"
+        formatted += f"Search Query: {search_results.get('query', '')}\n\n"
+        
+        # Format each result as a structured article entry (documentation style)
+        for i, result in enumerate(results, 1):
+            title = result.get('title', 'No title')
+            url = result.get('url', '')
+            content = result.get('content', '').strip()
+            source = self._extract_domain(url)
+            
+            # Format as structured documentation-style entry
+            formatted += f"{i}. {title}\n"
+            formatted += f"   Source: {source}\n"
+            
+            # Format content in a readable way
+            if content:
+                # Clean up content - remove excessive whitespace and newlines
+                content_lines = [line.strip() for line in content.split('\n') if line.strip()]
+                content_text = ' '.join(content_lines)
+                
+                # Truncate if too long (keep first 400 chars for readability)
+                if len(content_text) > 400:
+                    # Try to break at sentence boundary
+                    truncated = content_text[:400]
+                    last_period = truncated.rfind('.')
+                    if last_period > 300:  # If we found a period in reasonable range
+                        content_text = truncated[:last_period + 1]
+                    else:
+                        content_text = truncated + "..."
+                
+                formatted += f"   {content_text}\n"
+            
+            formatted += f"   Read More: {url}\n\n"
+        
+        formatted += "\n---\n"
+        formatted += "These search results provide current information from the web. Use this information to answer the user's query accurately and cite sources when relevant.\n"
         
         return formatted
+    
+    def _extract_domain(self, url: str) -> str:
+        """Extract domain name from URL for cleaner source display"""
+        if not url:
+            return "Unknown"
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            domain = parsed.netloc or parsed.path
+            # Remove www. prefix if present
+            if domain.startswith('www.'):
+                domain = domain[4:]
+            return domain
+        except:
+            return url
 
 
 # Global instance

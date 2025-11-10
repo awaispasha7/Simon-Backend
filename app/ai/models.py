@@ -433,7 +433,26 @@ If document context is provided above, you MUST use it. This is not optional.
         Conversation context:
         {self._build_conversation_context(kwargs.get("conversation_history", []), kwargs.get("image_context", ""))}
 
-        Stay focused on content strategy/scriptwriting, not story‑novel crafting. Be decisive and concise.{rag_context_text}"
+        Stay focused on content strategy/scriptwriting, not story‑novel crafting. Be decisive and concise.
+
+        WEB SEARCH RESULTS FORMATTING:
+        When you use web search results to answer questions, format your response in a structured, documentation-style format similar to help articles:
+        - Start with a clear heading/title for the topic
+        - Present information as a numbered list (1., 2., 3., etc.)
+        - For each source/article, include:
+          * Title/Headline
+          * Source: [domain name, e.g., "Health", "Men's Health", "CNN"]
+          * Brief description/summary of the key points
+          * Read More: [URL] (if relevant)
+        - Use clean, readable formatting with proper spacing between items
+        - End with a helpful summary or "Want to know more?" section if relevant
+        - Example format:
+          "1. Title of Article
+             Source: Health
+             Description of key points and insights from the article.
+             Read More: [URL]"
+        
+        {rag_context_text}"
             """
 
             # Build messages with conversation history for context
