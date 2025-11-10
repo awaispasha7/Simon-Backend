@@ -43,6 +43,11 @@ A FastAPI-based backend service for the Simon Chatbot personal AI assistant appl
    OPENAI_API_KEY=your_openai_api_key
    GEMINI_API_KEY=your_gemini_api_key
    ANTHROPIC_API_KEY=your_anthropic_api_key
+   
+   # LangSmith Monitoring (Optional but recommended)
+   LANGSMITH_API_KEY=your_langsmith_api_key
+   LANGSMITH_PROJECT=simon-chatbot
+   LANGSMITH_TRACING_V2=true
    ```
 
 ## Database Setup
@@ -253,6 +258,39 @@ backend/
 | `OPENAI_API_KEY` | Your OpenAI API key | Yes |
 | `GEMINI_API_KEY` | Your Google Gemini API key | Yes |
 | `ANTHROPIC_API_KEY` | Your Anthropic Claude API key | Yes |
+| `LANGSMITH_API_KEY` | Your LangSmith API key for monitoring | No |
+| `LANGSMITH_PROJECT` | LangSmith project name (defaults to "simon-chatbot") | No |
+| `LANGSMITH_TRACING_V2` | Enable LangSmith tracing v2 (defaults to "true") | No |
+
+### LangSmith Setup (Optional)
+
+LangSmith provides monitoring and observability for your AI operations. To enable it:
+
+1. **Get your LangSmith API key:**
+   - Sign up at [https://smith.langchain.com](https://smith.langchain.com) (free tier available)
+   - Go to Settings → API Keys
+   - Create a new API key or copy an existing one
+
+2. **Add to your `.env` file:**
+   ```env
+   LANGSMITH_API_KEY=lsv2_pt_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   LANGSMITH_PROJECT=simon-chatbot
+   LANGSMITH_TRACING_V2=true
+   ```
+
+3. **What gets monitored:**
+   - All OpenAI chat completions (with full prompts and responses)
+   - All OpenAI embedding generations
+   - RAG context retrieval operations
+   - Document processing operations
+   - Token usage, latency, and error tracking
+
+4. **View your traces:**
+   - Visit [https://smith.langchain.com](https://smith.langchain.com)
+   - Navigate to your project (default: "simon-chatbot")
+   - View real-time traces, filter by tags, and analyze performance
+
+**Note:** LangSmith is optional. If you don't set `LANGSMITH_API_KEY`, the application will run normally without monitoring.
 
 ## Development
 

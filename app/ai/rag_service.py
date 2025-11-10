@@ -9,6 +9,20 @@ from .embedding_service import get_embedding_service
 from .vector_storage import vector_storage
 from .document_processor import document_processor
 
+# LangSmith integration
+try:
+    from .langsmith_config import create_trace, trace_function
+    LANGSMITH_AVAILABLE = True
+except ImportError:
+    LANGSMITH_AVAILABLE = False
+    def create_trace(*args, **kwargs):
+        from contextlib import nullcontext
+        return nullcontext()
+    def trace_function(*args, **kwargs):
+        def noop_decorator(func):
+            return func
+        return noop_decorator
+
 
 class RAGService:
     """Service for RAG-enhanced chat responses"""
@@ -109,125 +123,138 @@ class RAGService:
             - combined_context_text: Formatted context for LLM prompt
             - metadata: Metadata about retrieval
         """
-        try:
-            print(f"RAG: Building context for user {user_id}")
-            
-            # Step 1: Generate query embedding (include conversation context if available)
-            # CRITICAL: Expand generic queries about "me" or "my" to include brand-related keywords
-            # This helps match against brand documents (niche, ICP, tone, etc.) instead of irrelevant docs
-            expanded_query = self._expand_brand_query(user_message)
-            
-            if conversation_history:
-                # Combine recent conversation for better context
-                recent_context = "\n".join([
-                    f"{msg.get('role', 'user')}: {msg.get('content', '')}"
-                    for msg in conversation_history[-3:]
-                ])
-                query_text = f"{recent_context}\nUser: {expanded_query}"
-            else:
-                query_text = expanded_query
-            
-            query_embedding = await self._get_embedding_service().generate_query_embedding(query_text)
-            
-            # Step 2: Retrieve user-specific context
-            user_context = await self.vector_storage.get_similar_user_messages(
-                query_embedding=query_embedding,
-                user_id=user_id,
-                project_id=project_id,
-                match_count=self.user_match_count,
-                similarity_threshold=self.similarity_threshold
-            )
-            
-            # Step 3: Retrieve global knowledge patterns
-            global_context = await self.vector_storage.get_similar_global_knowledge(
-                query_embedding=query_embedding,
-                match_count=self.global_match_count,
-                similarity_threshold=self.similarity_threshold,
-                min_quality_score=0.6
-            )
-            
-            # Step 4: Debug - Check if there are any document embeddings for this user (QUICK CHECK ONLY)
+        # LangSmith tracing for RAG operations
+        with create_trace(
+            name="get_rag_context",
+            run_type="chain",
+            tags=["rag", "retrieval", "context_building"],
+            metadata={
+                "user_id": str(user_id),
+                "project_id": str(project_id) if project_id else None,
+                "user_message_length": len(user_message),
+                "has_conversation_history": bool(conversation_history),
+                "conversation_history_length": len(conversation_history) if conversation_history else 0
+            }
+        ):
             try:
-                from app.database.supabase import get_supabase_client
-                supabase = get_supabase_client()
-                print(f"🔍 [RAG] Quick check: Querying for user_id: {str(user_id)}")
-                debug_result = supabase.table('document_embeddings').select('embedding_id', count='exact').eq('user_id', str(user_id)).limit(1).execute()
-                count = debug_result.count if hasattr(debug_result, 'count') else len(debug_result.data) if debug_result.data else 0
-                print(f"🔍 [RAG] Quick check: Found {count} document embeddings for user {user_id}")
-            except Exception as e:
-                print(f"🔍 [RAG] Quick check error: {e}")
-            
-            # Step 4: Retrieve document context
-            # For personal assistant: search across all projects to maximize context
-            # For multi-user: can limit by project_id if provided
-            print(f"🔍 [RAG] Calling get_document_context")
-            print(f"🔍 [RAG] user_id={user_id} (type: {type(user_id)}, str: {str(user_id)})")
-            print(f"🔍 [RAG] project_id={project_id} (type: {type(project_id)})")
-            print(f"🔍 [RAG] query_embedding length={len(query_embedding) if query_embedding else 'None'}")
-            
-            # Use very low threshold (0.1) to ensure we find documents
-            # Vector similarity scores can be lower than expected even for relevant content
-            document_context = []
-            try:
-                print(f"🔍 [RAG] Starting document retrieval...")
-                document_context = await document_processor.get_document_context(
+                print(f"RAG: Building context for user {user_id}")
+                
+                # Step 1: Generate query embedding (include conversation context if available)
+                # CRITICAL: Expand generic queries about "me" or "my" to include brand-related keywords
+                # This helps match against brand documents (niche, ICP, tone, etc.) instead of irrelevant docs
+                expanded_query = self._expand_brand_query(user_message)
+                
+                if conversation_history:
+                    # Combine recent conversation for better context
+                    recent_context = "\n".join([
+                        f"{msg.get('role', 'user')}: {msg.get('content', '')}"
+                        for msg in conversation_history[-3:]
+                    ])
+                    query_text = f"{recent_context}\nUser: {expanded_query}"
+                else:
+                    query_text = expanded_query
+                
+                query_embedding = await self._get_embedding_service().generate_query_embedding(query_text)
+                
+                # Step 2: Retrieve user-specific context
+                user_context = await self.vector_storage.get_similar_user_messages(
                     query_embedding=query_embedding,
                     user_id=user_id,
-                    project_id=project_id,  # None = search all projects, specific ID = limit to that project
-                    match_count=10,  # Increase match count to get more results
-                    similarity_threshold=0.1  # Low threshold to ensure retrieval
+                    project_id=project_id,
+                    match_count=self.user_match_count,
+                    similarity_threshold=self.similarity_threshold
                 )
-                print(f"✅ [RAG] Retrieved {len(document_context)} document chunks")
-                if document_context:
-                    print(f"✅ [RAG] First chunk preview: {document_context[0].get('chunk_text', '')[:200]}")
-                    print(f"✅ [RAG] Document chunks will be included in AI context")
-                else:
-                    print(f"⚠️ [RAG] No document chunks retrieved - check if documents match query or threshold is too high")
-            except Exception as doc_error:
-                print(f"❌ [RAG] Error retrieving document context: {doc_error}")
-                import traceback
-                print(traceback.format_exc())
+                
+                # Step 3: Retrieve global knowledge patterns
+                global_context = await self.vector_storage.get_similar_global_knowledge(
+                    query_embedding=query_embedding,
+                    match_count=self.global_match_count,
+                    similarity_threshold=self.similarity_threshold,
+                    min_quality_score=0.6
+                )
+                
+                # Step 4: Debug - Check if there are any document embeddings for this user (QUICK CHECK ONLY)
+                try:
+                    from app.database.supabase import get_supabase_client
+                    supabase = get_supabase_client()
+                    print(f"🔍 [RAG] Quick check: Querying for user_id: {str(user_id)}")
+                    debug_result = supabase.table('document_embeddings').select('embedding_id', count='exact').eq('user_id', str(user_id)).limit(1).execute()
+                    count = debug_result.count if hasattr(debug_result, 'count') else len(debug_result.data) if debug_result.data else 0
+                    print(f"🔍 [RAG] Quick check: Found {count} document embeddings for user {user_id}")
+                except Exception as e:
+                    print(f"🔍 [RAG] Quick check error: {e}")
+                
+                # Step 4: Retrieve document context
+                # For personal assistant: search across all projects to maximize context
+                # For multi-user: can limit by project_id if provided
+                print(f"🔍 [RAG] Calling get_document_context")
+                print(f"🔍 [RAG] user_id={user_id} (type: {type(user_id)}, str: {str(user_id)})")
+                print(f"🔍 [RAG] project_id={project_id} (type: {type(project_id)})")
+                print(f"🔍 [RAG] query_embedding length={len(query_embedding) if query_embedding else 'None'}")
+                
+                # Use very low threshold (0.1) to ensure we find documents
+                # Vector similarity scores can be lower than expected even for relevant content
                 document_context = []
-            
-            # Step 5: Build combined context text for LLM prompt
-            combined_context_text = self._format_rag_context(user_context, global_context, document_context)
-            
-            # Step 6: Build metadata
-            metadata = {
-                "user_context_count": len(user_context),
-                "global_context_count": len(global_context),
-                "document_context_count": len(document_context),
-                "query_length": len(user_message),
-                "has_conversation_history": bool(conversation_history)
-            }
-            
-            print(f"📊 [RAG] Final summary: {len(user_context)} user contexts, {len(global_context)} global patterns, {len(document_context)} document chunks")
-            print(f"📊 [RAG] Combined context text length: {len(combined_context_text)} chars")
-            if combined_context_text:
-                print(f"📊 [RAG] Combined context preview (first 300 chars): {combined_context_text[:300]}...")
-            if document_context:
-                print(f"✅ [RAG] SUCCESS: Document context will be included in AI prompt!")
-                print(f"✅ [RAG] Document chunks in context: {len(document_context)}")
-            else:
-                print(f"⚠️ [RAG] WARNING: No document context retrieved - AI won't have document information")
-            
-            return {
-                "user_context": user_context,
-                "global_context": global_context,
-                "document_context": document_context,
-                "combined_context_text": combined_context_text,
-                "metadata": metadata
-            }
-            
-        except Exception as e:
-            print(f"ERROR: Failed to get RAG context: {e}")
-            return {
-                "user_context": [],
-                "global_context": [],
-                "document_context": [],
-                "combined_context_text": "",
-                "metadata": {"error": str(e)}
-            }
+                try:
+                    print(f"🔍 [RAG] Starting document retrieval...")
+                    document_context = await document_processor.get_document_context(
+                        query_embedding=query_embedding,
+                        user_id=user_id,
+                        project_id=project_id,  # None = search all projects, specific ID = limit to that project
+                        match_count=10,  # Increase match count to get more results
+                        similarity_threshold=0.1  # Low threshold to ensure retrieval
+                    )
+                    print(f"✅ [RAG] Retrieved {len(document_context)} document chunks")
+                    if document_context:
+                        print(f"✅ [RAG] First chunk preview: {document_context[0].get('chunk_text', '')[:200]}")
+                        print(f"✅ [RAG] Document chunks will be included in AI context")
+                    else:
+                        print(f"⚠️ [RAG] No document chunks retrieved - check if documents match query or threshold is too high")
+                except Exception as doc_error:
+                    print(f"❌ [RAG] Error retrieving document context: {doc_error}")
+                    import traceback
+                    print(traceback.format_exc())
+                    document_context = []
+                
+                # Step 5: Build combined context text for LLM prompt
+                combined_context_text = self._format_rag_context(user_context, global_context, document_context)
+                
+                # Step 6: Build metadata
+                metadata = {
+                    "user_context_count": len(user_context),
+                    "global_context_count": len(global_context),
+                    "document_context_count": len(document_context),
+                    "query_length": len(user_message),
+                    "has_conversation_history": bool(conversation_history)
+                }
+                
+                print(f"📊 [RAG] Final summary: {len(user_context)} user contexts, {len(global_context)} global patterns, {len(document_context)} document chunks")
+                print(f"📊 [RAG] Combined context text length: {len(combined_context_text)} chars")
+                if combined_context_text:
+                    print(f"📊 [RAG] Combined context preview (first 300 chars): {combined_context_text[:300]}...")
+                if document_context:
+                    print(f"✅ [RAG] SUCCESS: Document context will be included in AI prompt!")
+                    print(f"✅ [RAG] Document chunks in context: {len(document_context)}")
+                else:
+                    print(f"⚠️ [RAG] WARNING: No document context retrieved - AI won't have document information")
+                
+                return {
+                    "user_context": user_context,
+                    "global_context": global_context,
+                    "document_context": document_context,
+                    "combined_context_text": combined_context_text,
+                    "metadata": metadata
+                }
+                
+            except Exception as e:
+                print(f"ERROR: Failed to get RAG context: {e}")
+                return {
+                    "user_context": [],
+                    "global_context": [],
+                    "document_context": [],
+                    "combined_context_text": "",
+                    "metadata": {"error": str(e)}
+                }
     
     def _format_rag_context(
         self,
@@ -343,27 +370,41 @@ class RAGService:
         Returns:
             True if successful, False otherwise
         """
-        try:
-            # Generate embedding
-            embedding = await self._get_embedding_service().generate_embedding(content)
-            
-            # Store embedding
-            embedding_id = await self.vector_storage.store_message_embedding(
-                message_id=message_id,
-                user_id=user_id,
-                project_id=project_id,
-                session_id=session_id,
-                embedding=embedding,
-                content=content,
-                role=role,
-                metadata=metadata
-            )
-            
-            return embedding_id is not None
-            
-        except Exception as e:
-            print(f"ERROR: Failed to embed and store message: {e}")
-            return False
+        # LangSmith tracing
+        with create_trace(
+            name="embed_and_store_message",
+            run_type="chain",
+            tags=["rag", "embedding", "storage"],
+            metadata={
+                "message_id": str(message_id),
+                "user_id": str(user_id),
+                "project_id": str(project_id),
+                "session_id": str(session_id),
+                "role": role,
+                "content_length": len(content)
+            }
+        ):
+            try:
+                # Generate embedding
+                embedding = await self._get_embedding_service().generate_embedding(content)
+                
+                # Store embedding
+                embedding_id = await self.vector_storage.store_message_embedding(
+                    message_id=message_id,
+                    user_id=user_id,
+                    project_id=project_id,
+                    session_id=session_id,
+                    embedding=embedding,
+                    content=content,
+                    role=role,
+                    metadata=metadata
+                )
+                
+                return embedding_id is not None
+                
+            except Exception as e:
+                print(f"ERROR: Failed to embed and store message: {e}")
+                return False
     
     async def extract_and_store_knowledge(
         self,
@@ -380,44 +421,55 @@ class RAGService:
             user_id: ID of the user (for attribution, not stored in global KB)
             project_id: ID of the project
         """
-        try:
-            print(f"RAG: Extracting knowledge from conversation (user: {user_id})")
-            
-            # Analyze conversation for patterns
-            # This is a simplified version - you can make this more sophisticated
-            
-            # Example: Extract character development patterns
-            character_mentions = self._extract_character_patterns(conversation)
-            for char_pattern in character_mentions:
-                embedding = await self._get_embedding_service().generate_embedding(char_pattern['text'])
-                await self.vector_storage.store_global_knowledge(
-                    category='character',
-                    pattern_type='character_development',
-                    embedding=embedding,
-                    example_text=char_pattern['text'],
-                    description=char_pattern.get('description'),
-                    quality_score=0.7,
-                    tags=['conversation_extracted']
-                )
-            
-            # Example: Extract plot patterns
-            plot_patterns = self._extract_plot_patterns(conversation)
-            for plot_pattern in plot_patterns:
-                embedding = await self._get_embedding_service().generate_embedding(plot_pattern['text'])
-                await self.vector_storage.store_global_knowledge(
-                    category='plot',
-                    pattern_type='story_arc',
-                    embedding=embedding,
-                    example_text=plot_pattern['text'],
-                    description=plot_pattern.get('description'),
-                    quality_score=0.7,
-                    tags=['conversation_extracted']
-                )
-            
-            print(f"RAG: Extracted {len(character_mentions)} character patterns, {len(plot_patterns)} plot patterns")
-            
-        except Exception as e:
-            print(f"ERROR: Failed to extract and store knowledge: {e}")
+        # LangSmith tracing
+        with create_trace(
+            name="extract_and_store_knowledge",
+            run_type="chain",
+            tags=["rag", "knowledge_extraction", "storage"],
+            metadata={
+                "user_id": str(user_id),
+                "project_id": str(project_id),
+                "conversation_length": len(conversation)
+            }
+        ):
+            try:
+                print(f"RAG: Extracting knowledge from conversation (user: {user_id})")
+                
+                # Analyze conversation for patterns
+                # This is a simplified version - you can make this more sophisticated
+                
+                # Example: Extract character development patterns
+                character_mentions = self._extract_character_patterns(conversation)
+                for char_pattern in character_mentions:
+                    embedding = await self._get_embedding_service().generate_embedding(char_pattern['text'])
+                    await self.vector_storage.store_global_knowledge(
+                        category='character',
+                        pattern_type='character_development',
+                        embedding=embedding,
+                        example_text=char_pattern['text'],
+                        description=char_pattern.get('description'),
+                        quality_score=0.7,
+                        tags=['conversation_extracted']
+                    )
+                
+                # Example: Extract plot patterns
+                plot_patterns = self._extract_plot_patterns(conversation)
+                for plot_pattern in plot_patterns:
+                    embedding = await self._get_embedding_service().generate_embedding(plot_pattern['text'])
+                    await self.vector_storage.store_global_knowledge(
+                        category='plot',
+                        pattern_type='story_arc',
+                        embedding=embedding,
+                        example_text=plot_pattern['text'],
+                        description=plot_pattern.get('description'),
+                        quality_score=0.7,
+                        tags=['conversation_extracted']
+                    )
+                
+                print(f"RAG: Extracted {len(character_mentions)} character patterns, {len(plot_patterns)} plot patterns")
+                
+            except Exception as e:
+                print(f"ERROR: Failed to extract and store knowledge: {e}")
     
     def _extract_character_patterns(self, conversation: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """Extract character-related patterns from conversation"""

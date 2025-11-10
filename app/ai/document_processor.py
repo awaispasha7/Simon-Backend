@@ -28,6 +28,16 @@ from .embedding_service import get_embedding_service
 from .vector_storage import vector_storage
 from ..database.supabase import get_supabase_client
 
+# LangSmith integration
+try:
+    from .langsmith_config import create_trace
+    LANGSMITH_AVAILABLE = True
+except ImportError:
+    LANGSMITH_AVAILABLE = False
+    def create_trace(*args, **kwargs):
+        from contextlib import nullcontext
+        return nullcontext()
+
 
 class DocumentProcessor:
     """Service for processing uploaded documents and generating embeddings"""
@@ -70,108 +80,122 @@ class DocumentProcessor:
         Returns:
             Dict containing processing results
         """
-        try:
-            print(f"📄 Processing document: {filename} (type: {content_type})")
-            
-            # Step 1: Extract text based on file type
-            text_content = await self._extract_text(file_content, filename, content_type)
-            
-            if not text_content or not text_content.strip():
+        # LangSmith tracing for document processing
+        with create_trace(
+            name="process_document",
+            run_type="chain",
+            tags=["document_processing", "embedding", "storage"],
+            metadata={
+                "asset_id": str(asset_id),
+                "user_id": str(user_id),
+                "project_id": str(project_id),
+                "filename": filename,
+                "content_type": content_type,
+                "file_size_bytes": len(file_content)
+            }
+        ):
+            try:
+                print(f"📄 Processing document: {filename} (type: {content_type})")
+                
+                # Step 1: Extract text based on file type
+                text_content = await self._extract_text(file_content, filename, content_type)
+                
+                if not text_content or not text_content.strip():
+                    return {
+                        "success": False,
+                        "error": "No text content extracted from document",
+                        "chunks_processed": 0
+                    }
+                
+                print(f"📝 Extracted {len(text_content)} characters of text")
+                
+                # Step 2: Split text into chunks
+                chunks = self._split_text_into_chunks(text_content)
+                
+                if not chunks:
+                    return {
+                        "success": False,
+                        "error": "No text chunks created from document",
+                        "chunks_processed": 0
+                    }
+                
+                print(f"📚 Created {len(chunks)} text chunks")
+                
+                # Step 3: Generate embeddings for each chunk
+                chunks_processed = 0
+                embeddings_created = 0
+                
+                for i, chunk in enumerate(chunks[:self.max_chunks_per_document]):
+                    try:
+                        # Generate embedding for this chunk
+                        embedding = await self._get_embedding_service().generate_embedding(chunk)
+                        
+                        # Store embedding in database
+                        embedding_id = await vector_storage.store_document_embedding(
+                            asset_id=asset_id,
+                            user_id=user_id,
+                            project_id=project_id,
+                            document_type=self._get_document_type(filename),
+                            chunk_index=i,
+                            chunk_text=chunk,
+                            embedding=embedding,
+                            metadata={
+                                "filename": filename,
+                                "content_type": content_type,
+                                "chunk_size": len(chunk),
+                                "total_chunks": len(chunks)
+                            }
+                        )
+                        
+                        if embedding_id:
+                            embeddings_created += 1
+                            print(f"✅ Created embedding for chunk {i+1}/{len(chunks)}")
+                        else:
+                            print(f"❌ Failed to store embedding for chunk {i+1}")
+                        
+                        chunks_processed += 1
+                        
+                        # Small delay to avoid rate limiting
+                        await asyncio.sleep(0.1)
+                        
+                    except Exception as chunk_error:
+                        print(f"❌ Error processing chunk {i+1}: {chunk_error}")
+                        continue
+                
+                # Step 4: Update asset record with processing status
+                await self._update_asset_processing_status(
+                    asset_id, 
+                    "processed", 
+                    {
+                        "chunks_processed": chunks_processed,
+                        "embeddings_created": embeddings_created,
+                        "total_text_length": len(text_content)
+                    }
+                )
+                
                 return {
-                    "success": False,
-                    "error": "No text content extracted from document",
-                    "chunks_processed": 0
-                }
-            
-            print(f"📝 Extracted {len(text_content)} characters of text")
-            
-            # Step 2: Split text into chunks
-            chunks = self._split_text_into_chunks(text_content)
-            
-            if not chunks:
-                return {
-                    "success": False,
-                    "error": "No text chunks created from document",
-                    "chunks_processed": 0
-                }
-            
-            print(f"📚 Created {len(chunks)} text chunks")
-            
-            # Step 3: Generate embeddings for each chunk
-            chunks_processed = 0
-            embeddings_created = 0
-            
-            for i, chunk in enumerate(chunks[:self.max_chunks_per_document]):
-                try:
-                    # Generate embedding for this chunk
-                    embedding = await self._get_embedding_service().generate_embedding(chunk)
-                    
-                    # Store embedding in database
-                    embedding_id = await vector_storage.store_document_embedding(
-                        asset_id=asset_id,
-                        user_id=user_id,
-                        project_id=project_id,
-                        document_type=self._get_document_type(filename),
-                        chunk_index=i,
-                        chunk_text=chunk,
-                        embedding=embedding,
-                        metadata={
-                            "filename": filename,
-                            "content_type": content_type,
-                            "chunk_size": len(chunk),
-                            "total_chunks": len(chunks)
-                        }
-                    )
-                    
-                    if embedding_id:
-                        embeddings_created += 1
-                        print(f"✅ Created embedding for chunk {i+1}/{len(chunks)}")
-                    else:
-                        print(f"❌ Failed to store embedding for chunk {i+1}")
-                    
-                    chunks_processed += 1
-                    
-                    # Small delay to avoid rate limiting
-                    await asyncio.sleep(0.1)
-                    
-                except Exception as chunk_error:
-                    print(f"❌ Error processing chunk {i+1}: {chunk_error}")
-                    continue
-            
-            # Step 4: Update asset record with processing status
-            await self._update_asset_processing_status(
-                asset_id, 
-                "processed", 
-                {
+                    "success": True,
                     "chunks_processed": chunks_processed,
                     "embeddings_created": embeddings_created,
-                    "total_text_length": len(text_content)
+                    "total_text_length": len(text_content),
+                    "document_type": self._get_document_type(filename)
                 }
-            )
-            
-            return {
-                "success": True,
-                "chunks_processed": chunks_processed,
-                "embeddings_created": embeddings_created,
-                "total_text_length": len(text_content),
-                "document_type": self._get_document_type(filename)
-            }
-            
-        except Exception as e:
-            print(f"❌ Error processing document {filename}: {e}")
-            
-            # Update asset record with error status
-            await self._update_asset_processing_status(
-                asset_id, 
-                "failed", 
-                {"error": str(e)}
-            )
-            
-            return {
-                "success": False,
-                "error": str(e),
-                "chunks_processed": 0
-            }
+                
+            except Exception as e:
+                print(f"❌ Error processing document {filename}: {e}")
+                
+                # Update asset record with error status
+                await self._update_asset_processing_status(
+                    asset_id, 
+                    "failed", 
+                    {"error": str(e)}
+                )
+                
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "chunks_processed": 0
+                }
     
     async def _extract_text(self, file_content: bytes, filename: str, content_type: str) -> str:
         """Extract text from various document formats"""

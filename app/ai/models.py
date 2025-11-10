@@ -19,6 +19,18 @@ except ImportError as e:
     print(f"Warning: OpenAI not available: {e}")
     OPENAI_AVAILABLE = False
 
+# LangSmith integration
+try:
+    from .langsmith_config import wrap_openai_client, create_trace
+    LANGSMITH_AVAILABLE = True
+except ImportError:
+    LANGSMITH_AVAILABLE = False
+    def wrap_openai_client(client):
+        return client
+    def create_trace(*args, **kwargs):
+        from contextlib import nullcontext
+        return nullcontext()
+
 try:
     import google.generativeai as genai
     GEMINI_AVAILABLE = True
@@ -49,7 +61,9 @@ class AIModelManager:
         # Support both old and new clients; prefer new client
         if api_key:
             try:
-                self.openai_client = OpenAI(api_key=api_key)
+                client = OpenAI(api_key=api_key)
+                # Wrap with LangSmith for automatic tracing
+                self.openai_client = wrap_openai_client(client)
             except Exception:
                 self.openai_client = None
             # Fallback for older usage
@@ -423,40 +437,65 @@ If document context is provided above, you MUST use it. This is not optional.
             
             print(f"🤖 [AI] Selected model: {model_name} ({'vision-capable' if image_data_list else 'text-only'})")
 
-            client = self.openai_client
-            if client is None:
-                # Final fallback to module-level client if available
-                response = openai.chat.completions.create(
+            # Prepare metadata for LangSmith tracing
+            rag_context = kwargs.get("rag_context", {})
+            rag_metadata = rag_context.get("metadata", {}) if rag_context else {}
+            trace_metadata = {
+                "task_type": "chat",
+                "model": model_name,
+                "has_images": len(image_data_list) > 0 if image_data_list else False,
+                "image_count": len(image_data_list) if image_data_list else 0,
+                "message_count": len(messages),
+                "has_rag_context": bool(rag_context),
+                "rag_user_context_count": rag_metadata.get("user_context_count", 0) if isinstance(rag_metadata, dict) else 0,
+                "rag_document_context_count": rag_metadata.get("document_context_count", 0) if isinstance(rag_metadata, dict) else 0,
+                "rag_global_context_count": rag_metadata.get("global_context_count", 0) if isinstance(rag_metadata, dict) else 0,
+                "max_tokens": kwargs.get("max_tokens", 4000),
+                "temperature": 0.7
+            }
+
+            # LangSmith tracing (automatic via wrapped client, but add metadata)
+            with create_trace(
+                name="generate_chat_response",
+                run_type="llm",
+                tags=["chat", "openai", "llm"],
+                metadata=trace_metadata
+            ):
+                client = self.openai_client
+                if client is None:
+                    # Final fallback to module-level client if available
+                    response = openai.chat.completions.create(
+                        model=model_name,  # Use GPT-4o for vision, GPT-4o-mini for text-only
+                        messages=messages,
+                        max_completion_tokens=kwargs.get("max_tokens", 4000),  # Increased for full responses and scripts
+                        temperature=0.7,
+                        top_p=1.0,  # Standard value for balanced creativity
+                        n=1,  # Single response
+                        stream=False,  # Non-streaming for API consistency
+                        presence_penalty=0.0,  # No penalty for topic repetition
+                        frequency_penalty=0.0  # No penalty for word repetition
+                    )
+                else:
+                    response = client.chat.completions.create(
                     model=model_name,  # Use GPT-4o for vision, GPT-4o-mini for text-only
                     messages=messages,
-                    max_completion_tokens=kwargs.get("max_tokens", 4000),  # Increased for full responses and scripts
+                    max_completion_tokens=kwargs.get("max_tokens", 4000),  # Increased for full script generation
                     temperature=0.7,
                     top_p=1.0,  # Standard value for balanced creativity
                     n=1,  # Single response
                     stream=False,  # Non-streaming for API consistency
                     presence_penalty=0.0,  # No penalty for topic repetition
                     frequency_penalty=0.0  # No penalty for word repetition
-                )
-            else:
-                response = client.chat.completions.create(
-                model=model_name,  # Use GPT-4o for vision, GPT-4o-mini for text-only
-                messages=messages,
-                max_completion_tokens=kwargs.get("max_tokens", 4000),  # Increased for full script generation
-                temperature=0.7,
-                top_p=1.0,  # Standard value for balanced creativity
-                n=1,  # Single response
-                stream=False,  # Non-streaming for API consistency
-                presence_penalty=0.0,  # No penalty for topic repetition
-                frequency_penalty=0.0  # No penalty for word repetition
-                )
-            
-            print(f"✅ OpenAI response received: {response}")
+                    )
+                
+                print(f"✅ OpenAI response received: {response}")
 
-            return {
-                "response": response.choices[0].message.content,
-                "model_used": model_name,
-                "tokens_used": response.usage.total_tokens if response.usage else 0
-            }
+                tokens_used = response.usage.total_tokens if response.usage else 0
+                return {
+                    "response": response.choices[0].message.content,
+                    "model_used": model_name,
+                    "tokens_used": tokens_used
+                }
         except Exception as e:
             print(f"❌ OpenAI chat error: {str(e)}")
             print(f"❌ Error type: {type(e).__name__}")
