@@ -9,21 +9,30 @@ from datetime import datetime
 from ..database.supabase import get_supabase_client
 
 # LangSmith tracing
-# @traceable decorator automatically reads from environment variables:
-# - LANGSMITH_TRACING=true (required)
-# - LANGSMITH_API_KEY (required)
-# - LANGSMITH_PROJECT (optional, defaults to "default")
-# - LANGSMITH_WORKSPACE_ID (optional, only for multi-workspace API keys)
+# For async functions, we use tracing_context inside the function
+# instead of @traceable decorator to ensure proper context propagation
 try:
-    from langsmith import traceable
+    from langsmith.run_helpers import tracing_context
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+    
+    # Get config for tracing_context
+    LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT", "simon-chatbot")
+    LANGSMITH_WORKSPACE_ID = os.getenv("LANGSMITH_WORKSPACE_ID")
+    
+    # Ensure environment variables are set
+    if LANGSMITH_PROJECT:
+        os.environ["LANGSMITH_PROJECT"] = LANGSMITH_PROJECT
+    if LANGSMITH_WORKSPACE_ID:
+        os.environ["LANGSMITH_WORKSPACE_ID"] = LANGSMITH_WORKSPACE_ID
+    os.environ["LANGSMITH_TRACING"] = "true"
+    
     LANGSMITH_AVAILABLE = True
 except ImportError:
     LANGSMITH_AVAILABLE = False
-    # Create a no-op decorator
-    def traceable(*args, **kwargs):
-        def decorator(func):
-            return func
-        return decorator
+    tracing_context = None
+    from contextlib import nullcontext as tracing_context
 
 
 class VectorStorageService:
@@ -129,7 +138,6 @@ class VectorStorageService:
             print(f"ERROR: Failed to retrieve similar user messages: {e}")
             return []
     
-    @traceable(run_type="retriever", name="VectorStoreRetriever_user_messages")
     async def get_similar_user_messages(
         self,
         query_embedding: List[float],
@@ -151,13 +159,36 @@ class VectorStorageService:
         Returns:
             List of similar messages with similarity scores
         """
-        return await self._get_similar_user_messages_impl(
-            query_embedding=query_embedding,
-            user_id=user_id,
-            project_id=project_id,
-            match_count=match_count,
-            similarity_threshold=similarity_threshold
-        )
+        # Use tracing_context for async functions to ensure proper nesting
+        if LANGSMITH_AVAILABLE and tracing_context:
+            with tracing_context(
+                project_name=LANGSMITH_PROJECT,
+                name="VectorStoreRetriever_user_messages",
+                run_type="retriever",
+                tags=["rag", "vector_search", "retrieval"],
+                metadata={
+                    "user_id": str(user_id),
+                    "project_id": str(project_id) if project_id else None,
+                    "match_count": match_count,
+                    "similarity_threshold": similarity_threshold,
+                    "embedding_dimension": len(query_embedding) if query_embedding else 0
+                }
+            ):
+                return await self._get_similar_user_messages_impl(
+                    query_embedding=query_embedding,
+                    user_id=user_id,
+                    project_id=project_id,
+                    match_count=match_count,
+                    similarity_threshold=similarity_threshold
+                )
+        else:
+            return await self._get_similar_user_messages_impl(
+                query_embedding=query_embedding,
+                user_id=user_id,
+                project_id=project_id,
+                match_count=match_count,
+                similarity_threshold=similarity_threshold
+            )
     
     async def _get_similar_global_knowledge_impl(
         self,
@@ -191,7 +222,6 @@ class VectorStorageService:
             print(f"ERROR: Failed to retrieve similar global knowledge: {e}")
             return []
     
-    @traceable(run_type="retriever", name="VectorStoreRetriever_global_knowledge")
     async def get_similar_global_knowledge(
         self,
         query_embedding: List[float],
@@ -211,12 +241,33 @@ class VectorStorageService:
         Returns:
             List of similar knowledge patterns with similarity scores
         """
-        return await self._get_similar_global_knowledge_impl(
-            query_embedding=query_embedding,
-            match_count=match_count,
-            similarity_threshold=similarity_threshold,
-            min_quality_score=min_quality_score
-        )
+        # Use tracing_context for async functions to ensure proper nesting
+        if LANGSMITH_AVAILABLE and tracing_context:
+            with tracing_context(
+                project_name=LANGSMITH_PROJECT,
+                name="VectorStoreRetriever_global_knowledge",
+                run_type="retriever",
+                tags=["rag", "vector_search", "retrieval"],
+                metadata={
+                    "match_count": match_count,
+                    "similarity_threshold": similarity_threshold,
+                    "min_quality_score": min_quality_score,
+                    "embedding_dimension": len(query_embedding) if query_embedding else 0
+                }
+            ):
+                return await self._get_similar_global_knowledge_impl(
+                    query_embedding=query_embedding,
+                    match_count=match_count,
+                    similarity_threshold=similarity_threshold,
+                    min_quality_score=min_quality_score
+                )
+        else:
+            return await self._get_similar_global_knowledge_impl(
+                query_embedding=query_embedding,
+                match_count=match_count,
+                similarity_threshold=similarity_threshold,
+                min_quality_score=min_quality_score
+            )
     
     async def store_global_knowledge(
         self,

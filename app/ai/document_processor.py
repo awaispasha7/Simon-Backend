@@ -29,24 +29,36 @@ from .vector_storage import vector_storage
 from ..database.supabase import get_supabase_client
 
 # LangSmith integration
-# @traceable decorator automatically reads from environment variables:
-# - LANGSMITH_TRACING=true (required)
-# - LANGSMITH_API_KEY (required)
-# - LANGSMITH_PROJECT (optional, defaults to "default")
-# - LANGSMITH_WORKSPACE_ID (optional, only for multi-workspace API keys)
+# For async functions, we use tracing_context inside the function
+# instead of @traceable decorator to ensure proper context propagation
 try:
-    from langsmith import traceable
+    from langsmith.run_helpers import tracing_context
     from .langsmith_config import create_trace
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+    
+    # Get config for tracing_context
+    LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT", "simon-chatbot")
+    LANGSMITH_WORKSPACE_ID = os.getenv("LANGSMITH_WORKSPACE_ID")
+    
+    # Ensure environment variables are set
+    if LANGSMITH_PROJECT:
+        os.environ["LANGSMITH_PROJECT"] = LANGSMITH_PROJECT
+    if LANGSMITH_WORKSPACE_ID:
+        os.environ["LANGSMITH_WORKSPACE_ID"] = LANGSMITH_WORKSPACE_ID
+    os.environ["LANGSMITH_TRACING"] = "true"
+    
     LANGSMITH_AVAILABLE = True
 except ImportError:
     LANGSMITH_AVAILABLE = False
-    def traceable(*args, **kwargs):
-        def decorator(func):
-            return func
-        return decorator
+    tracing_context = None
+    from contextlib import nullcontext as tracing_context
     def create_trace(*args, **kwargs):
         from contextlib import nullcontext
         return nullcontext()
+    LANGSMITH_PROJECT = None
+    LANGSMITH_WORKSPACE_ID = None
 
 
 class DocumentProcessor:
@@ -444,7 +456,6 @@ class DocumentProcessor:
             print(f"❌ Error retrieving document context: {e}")
             return []
     
-    @traceable(run_type="retriever", name="VectorStoreRetriever_documents")
     async def get_document_context(
         self,
         query_embedding: List[float],
@@ -466,13 +477,36 @@ class DocumentProcessor:
         Returns:
             List of relevant document chunks
         """
-        return await self._get_document_context_impl(
-            query_embedding=query_embedding,
-            user_id=user_id,
-            project_id=project_id,
-            match_count=match_count,
-            similarity_threshold=similarity_threshold
-        )
+        # Use tracing_context for async functions to ensure proper nesting
+        if LANGSMITH_AVAILABLE and tracing_context:
+            with tracing_context(
+                project_name=LANGSMITH_PROJECT,
+                name="VectorStoreRetriever_documents",
+                run_type="retriever",
+                tags=["rag", "vector_search", "retrieval", "documents"],
+                metadata={
+                    "user_id": str(user_id),
+                    "project_id": str(project_id) if project_id else None,
+                    "match_count": match_count,
+                    "similarity_threshold": similarity_threshold,
+                    "embedding_dimension": len(query_embedding) if query_embedding else 0
+                }
+            ):
+                return await self._get_document_context_impl(
+                    query_embedding=query_embedding,
+                    user_id=user_id,
+                    project_id=project_id,
+                    match_count=match_count,
+                    similarity_threshold=similarity_threshold
+                )
+        else:
+            return await self._get_document_context_impl(
+                query_embedding=query_embedding,
+                user_id=user_id,
+                project_id=project_id,
+                match_count=match_count,
+                similarity_threshold=similarity_threshold
+            )
 
 
 # Global singleton instance
