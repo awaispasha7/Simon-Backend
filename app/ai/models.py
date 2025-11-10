@@ -31,6 +31,14 @@ except ImportError:
         from contextlib import nullcontext
         return nullcontext()
 
+# Web search integration
+try:
+    from .web_search import web_search_service
+    WEB_SEARCH_AVAILABLE = True
+except ImportError:
+    WEB_SEARCH_AVAILABLE = False
+    web_search_service = None
+
 try:
     import google.generativeai as genai
     GEMINI_AVAILABLE = True
@@ -96,6 +104,29 @@ class AIModelManager:
             TaskType.DESCRIPTION: "gemini-2.5-pro",  # Latest Pro tier for creative reasoning
             TaskType.SCRIPT: "claude-sonnet-4.5",  # SOTA for structured long-form writing
             TaskType.SCENE: "gpt-4.1",  # Flagship for deep text generation
+        }
+    
+    def _get_web_search_function(self) -> Optional[Dict[str, Any]]:
+        """Get function definition for web search if available"""
+        if not WEB_SEARCH_AVAILABLE or not web_search_service or not web_search_service.is_enabled():
+            return None
+        
+        return {
+            "type": "function",
+            "function": {
+                "name": "internet_search",
+                "description": "Search the internet for current information, facts, news, or data that may not be in the training data. ALWAYS use this when: 1) User explicitly asks to search (e.g., 'search for', 'look up', 'find information about'), 2) User asks about current events, recent news, or latest information, 3) User asks about statistics, data, or facts that may have changed, 4) User asks 'what's the latest' or 'current' information, 5) User asks about recent research or studies. Use this tool proactively when you need up-to-date information.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query to find information on the internet"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
         }
     
     def _build_conversation_context(self, conversation_history: list, image_context: str = "") -> str:
@@ -200,11 +231,44 @@ class AIModelManager:
                 "error": str(e)
             }
     
+    def _should_force_search(self, prompt: str) -> bool:
+        """Check if web search should be forced based on explicit keywords"""
+        if not prompt:
+            return False
+        
+        prompt_lower = prompt.lower()
+        
+        # Explicit search triggers
+        search_keywords = [
+            "search for",
+            "look up",
+            "find information about",
+            "what's the latest",
+            "current news",
+            "recent research",
+            "latest statistics",
+            "current data",
+            "recent study",
+            "latest trends",
+            "what happened",
+            "news about",
+            "search:",
+            "google:",
+            "internet search"
+        ]
+        
+        return any(keyword in prompt_lower for keyword in search_keywords)
+    
     async def _generate_chat_response(self, prompt: str, **kwargs) -> Dict[str, Any]:
         """Generate chat response using GPT-5 mini as specified by client"""
         try:
             print(f"🤖 Attempting to call OpenAI with model: gpt-4o-mini")
             print(f"🤖 Prompt: '{prompt[:100]}...'")
+            
+            # Check if search should be forced
+            force_search = self._should_force_search(prompt)
+            if force_search:
+                print(f"🔍 [WebSearch] Explicit search trigger detected in query")
             
             # Check for RAG context (includes user messages, documents, and global knowledge)
             rag_context = kwargs.get("rag_context")
@@ -437,6 +501,23 @@ If document context is provided above, you MUST use it. This is not optional.
             
             print(f"🤖 [AI] Selected model: {model_name} ({'vision-capable' if image_data_list else 'text-only'})")
 
+            # Get web search function if available
+            web_search_function = self._get_web_search_function()
+            tools = [web_search_function] if web_search_function else None
+            
+            # Set tool_choice based on whether search should be forced
+            if tools:
+                if force_search:
+                    # Force search by requiring the function to be called
+                    tool_choice = {"type": "function", "function": {"name": "internet_search"}}
+                    print(f"🔍 [WebSearch] Forcing web search due to explicit trigger")
+                else:
+                    # Let AI decide when to search
+                    tool_choice = "auto"
+                    print(f"🔍 [WebSearch] Web search tool enabled - AI can search the internet when needed")
+            else:
+                tool_choice = None
+
             # Prepare metadata for LangSmith tracing
             rag_context = kwargs.get("rag_context", {})
             rag_metadata = rag_context.get("metadata", {}) if rag_context else {}
@@ -447,6 +528,7 @@ If document context is provided above, you MUST use it. This is not optional.
                 "image_count": len(image_data_list) if image_data_list else 0,
                 "message_count": len(messages),
                 "has_rag_context": bool(rag_context),
+                "has_web_search": bool(tools),
                 "rag_user_context_count": rag_metadata.get("user_context_count", 0) if isinstance(rag_metadata, dict) else 0,
                 "rag_document_context_count": rag_metadata.get("document_context_count", 0) if isinstance(rag_metadata, dict) else 0,
                 "rag_global_context_count": rag_metadata.get("global_context_count", 0) if isinstance(rag_metadata, dict) else 0,
@@ -462,37 +544,148 @@ If document context is provided above, you MUST use it. This is not optional.
                 metadata=trace_metadata
             ):
                 client = self.openai_client
-                if client is None:
-                    # Final fallback to module-level client if available
-                    response = openai.chat.completions.create(
-                        model=model_name,  # Use GPT-4o for vision, GPT-4o-mini for text-only
-                        messages=messages,
-                        max_completion_tokens=kwargs.get("max_tokens", 4000),  # Increased for full responses and scripts
-                        temperature=0.7,
-                        top_p=1.0,  # Standard value for balanced creativity
-                        n=1,  # Single response
-                        stream=False,  # Non-streaming for API consistency
-                        presence_penalty=0.0,  # No penalty for topic repetition
-                        frequency_penalty=0.0  # No penalty for word repetition
-                    )
-                else:
-                    response = client.chat.completions.create(
-                    model=model_name,  # Use GPT-4o for vision, GPT-4o-mini for text-only
-                    messages=messages,
-                    max_completion_tokens=kwargs.get("max_tokens", 4000),  # Increased for full script generation
-                    temperature=0.7,
-                    top_p=1.0,  # Standard value for balanced creativity
-                    n=1,  # Single response
-                    stream=False,  # Non-streaming for API consistency
-                    presence_penalty=0.0,  # No penalty for topic repetition
-                    frequency_penalty=0.0  # No penalty for word repetition
-                    )
                 
-                print(f"✅ OpenAI response received: {response}")
+                # Handle function calling in a loop (max 3 iterations to avoid infinite loops)
+                max_iterations = 3
+                iteration = 0
+                final_response = None
+                
+                while iteration < max_iterations:
+                    iteration += 1
+                    
+                    # Prepare API call parameters
+                    api_params = {
+                        "model": model_name,
+                        "messages": messages,
+                        "max_completion_tokens": kwargs.get("max_tokens", 4000),
+                        "temperature": 0.7,
+                        "top_p": 1.0,
+                        "n": 1,
+                        "stream": False,
+                        "presence_penalty": 0.0,
+                        "frequency_penalty": 0.0
+                    }
+                    
+                    # Add tools if available
+                    if tools:
+                        api_params["tools"] = tools
+                        api_params["tool_choice"] = tool_choice
+                    
+                    # Make API call
+                    if client is None:
+                        response = openai.chat.completions.create(**api_params)
+                    else:
+                        response = client.chat.completions.create(**api_params)
+                    
+                    print(f"✅ OpenAI response received (iteration {iteration}): {response}")
+                    
+                    # Check if function calling is needed
+                    message = response.choices[0].message
+                    
+                    # If no function calls, we're done
+                    if not message.tool_calls:
+                        final_response = message.content
+                        break
+                    
+                    # Handle function calls
+                    print(f"🔍 [WebSearch] Function call requested: {len(message.tool_calls)} call(s)")
+                    
+                    for tool_call in message.tool_calls:
+                        function_name = tool_call.function.name
+                        function_args = tool_call.function.arguments
+                        
+                        print(f"🔍 [WebSearch] Calling function: {function_name} with args: {function_args}")
+                        
+                        if function_name == "internet_search":
+                            import json
+                            try:
+                                args = json.loads(function_args) if isinstance(function_args, str) else function_args
+                                search_query = args.get("query", "")
+                                
+                                if search_query and web_search_service:
+                                    print(f"🔍 [WebSearch] Searching for: {search_query}")
+                                    search_results = web_search_service.search(search_query, max_results=5)
+                                    
+                                    # Format results for the model
+                                    if search_results.get("success"):
+                                        formatted_results = web_search_service.format_search_results_for_context(search_results)
+                                        print(f"🔍 [WebSearch] Found {len(search_results.get('results', []))} results")
+                                        
+                                        # Add function result to messages
+                                        messages.append({
+                                            "role": "assistant",
+                                            "content": None,
+                                            "tool_calls": [
+                                                {
+                                                    "id": tool_call.id,
+                                                    "type": "function",
+                                                    "function": {
+                                                        "name": function_name,
+                                                        "arguments": function_args
+                                                    }
+                                                }
+                                            ]
+                                        })
+                                        
+                                        messages.append({
+                                            "role": "tool",
+                                            "tool_call_id": tool_call.id,
+                                            "content": formatted_results
+                                        })
+                                    else:
+                                        error_msg = search_results.get("error", "Unknown error")
+                                        print(f"🔍 [WebSearch] Search failed: {error_msg}")
+                                        messages.append({
+                                            "role": "assistant",
+                                            "content": None,
+                                            "tool_calls": [
+                                                {
+                                                    "id": tool_call.id,
+                                                    "type": "function",
+                                                    "function": {
+                                                        "name": function_name,
+                                                        "arguments": function_args
+                                                    }
+                                                }
+                                            ]
+                                        })
+                                        messages.append({
+                                            "role": "tool",
+                                            "tool_call_id": tool_call.id,
+                                            "content": f"Search failed: {error_msg}"
+                                        })
+                                else:
+                                    print(f"🔍 [WebSearch] Search query empty or service unavailable")
+                                    messages.append({
+                                        "role": "tool",
+                                        "tool_call_id": tool_call.id,
+                                        "content": "Web search is not available"
+                                    })
+                            except Exception as e:
+                                print(f"🔍 [WebSearch] Error handling function call: {e}")
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "content": f"Error performing search: {str(e)}"
+                                })
+                        else:
+                            print(f"⚠️ [WebSearch] Unknown function: {function_name}")
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": f"Unknown function: {function_name}"
+                            })
+                    
+                    # Continue loop to get final response with search results
+                    tool_choice = None  # After first call, let model decide
+                
+                # If we exhausted iterations, use the last response
+                if final_response is None:
+                    final_response = message.content if message.content else "I apologize, but I encountered an issue processing your request."
 
                 tokens_used = response.usage.total_tokens if response.usage else 0
                 return {
-                    "response": response.choices[0].message.content,
+                    "response": final_response,
                     "model_used": model_name,
                     "tokens_used": tokens_used
                 }

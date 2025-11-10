@@ -49,6 +49,9 @@ A FastAPI-based backend service for the Simon Chatbot personal AI assistant appl
    LANGSMITH_PROJECT=simon-chatbot
    LANGSMITH_WORKSPACE_ID=your_workspace_id  # Required if API key is org-scoped (lsv2_sk_)
    LANGSMITH_TRACING_V2=true
+   
+   # Web Search (Optional - enables internet search capabilities)
+   TAVILY_API_KEY=your_tavily_api_key
    ```
 
 ## Database Setup
@@ -263,6 +266,7 @@ backend/
 | `LANGSMITH_PROJECT` | LangSmith project name (defaults to "simon-chatbot") | No |
 | `LANGSMITH_WORKSPACE_ID` | LangSmith workspace ID (required for org-scoped API keys) | No* |
 | `LANGSMITH_TRACING_V2` | Enable LangSmith tracing v2 (defaults to "true") | No |
+| `TAVILY_API_KEY` | Your Tavily API key for web search (optional) | No |
 
 \* Required if your API key is org-scoped (starts with `lsv2_sk_`)
 
@@ -299,6 +303,31 @@ LangSmith provides monitoring and observability for your AI operations. To enabl
    - View real-time traces, filter by tags, and analyze performance
 
 **Note:** LangSmith is optional. If you don't set `LANGSMITH_API_KEY`, the application will run normally without monitoring.
+
+### Web Search Setup (Optional)
+
+The chatbot can search the internet for current information using Tavily. To enable it:
+
+1. **Get your Tavily API key:**
+   - Sign up at [https://tavily.com](https://tavily.com) (free tier available)
+   - Go to your dashboard and create an API key
+
+2. **Add to your `.env` file:**
+   ```env
+   TAVILY_API_KEY=your_tavily_api_key_here
+   ```
+
+3. **How it works:**
+   - The AI will automatically use web search when users ask about current events, recent information, or facts
+   - Search is triggered via OpenAI function calling - the AI decides when to search
+   - Search results are automatically included in the AI's response context
+
+4. **Example queries that trigger search:**
+   - "What's the latest news about fitness trends?"
+   - "What are the current statistics on obesity?"
+   - "Find recent research on weight loss"
+
+**Note:** Web search is optional. If you don't set `TAVILY_API_KEY`, the chatbot will work normally but won't be able to search the internet.
 
 ## Development
 

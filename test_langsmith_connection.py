@@ -107,13 +107,21 @@ try:
     test_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", "test"))
     wrapped = wrap_openai_client(test_client)
     
-    if wrapped == test_client:
-        if not is_langsmith_enabled():
-            print("   [WARN] Client not wrapped (LangSmith disabled - this is OK)")
+    # Check if wrapping occurred by looking for LangSmith-specific attributes
+    # or by checking if the objects are different (wrapped clients are usually proxies)
+    is_wrapped = (
+        wrapped != test_client or  # Different object reference
+        hasattr(wrapped, '_langsmith') or  # Has LangSmith attribute
+        str(type(wrapped)) != str(type(test_client))  # Different type
+    )
+    
+    if is_langsmith_enabled():
+        if is_wrapped:
+            print("   [OK] OpenAI client wrapped with LangSmith")
         else:
-            print("   [WARN] Client not wrapped (check LangSmith initialization)")
+            print("   [WARN] Client may not be wrapped (but LangSmith is enabled)")
     else:
-        print("   [OK] OpenAI client wrapped with LangSmith")
+        print("   [OK] Client not wrapped (LangSmith disabled - this is OK)")
         
 except Exception as e:
     print(f"   [WARN] Could not test wrapping: {e}")
