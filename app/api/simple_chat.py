@@ -440,23 +440,44 @@ async def chat(
         
         # Generate and stream AI response
         async def generate_stream():
+            # LangSmith: Create parent trace for entire chat flow (RAG + LLM)
             try:
-                # Send "thinking" message immediately to start streaming
-                thinking_chunk = {
-                    "type": "thinking",
-                    "content": "Thinking..."
+                from app.ai.langsmith_config import create_trace, is_langsmith_enabled
+                langsmith_enabled = is_langsmith_enabled()
+            except:
+                langsmith_enabled = False
+                create_trace = lambda *args, **kwargs: __import__('contextlib').nullcontext()
+            
+            # Parent trace wraps entire chat generation (RAG + LLM)
+            with create_trace(
+                name="chat_generation",
+                run_type="chain",
+                tags=["chat", "rag", "llm"],
+                metadata={
+                    "user_id": str(user_id) if user_id else None,
+                    "session_id": str(session_id) if session_id else None,
+                    "project_id": str(project_id) if project_id else None,
+                    "message_length": len(chat_request.text) if chat_request.text else 0,
+                    "enable_web_search": chat_request.enable_web_search or False
                 }
-                yield f"data: {json.dumps(thinking_chunk)}\n\n"
-                
-                # Generate AI response
-                if AI_AVAILABLE and ai_manager:
-                    # Check if document text was already added to the prompt BEFORE any heavy operations
-                    # If document is already in prompt, skip RAG to avoid timeout
-                    has_document_context = (
-                        "## IMPORTANT: USER HAS UPLOADED A DOCUMENT" in chat_request.text or
-                        "## CONTENT FROM UPLOADED DOCUMENT" in chat_request.text or
-                        "Document Content:" in chat_request.text
-                    )
+            ) if langsmith_enabled else __import__('contextlib').nullcontext():
+                try:
+                    # Send "thinking" message immediately to start streaming
+                    thinking_chunk = {
+                        "type": "thinking",
+                        "content": "Thinking..."
+                    }
+                    yield f"data: {json.dumps(thinking_chunk)}\n\n"
+                    
+                    # Generate AI response
+                    if AI_AVAILABLE and ai_manager:
+                        # Check if document text was already added to the prompt BEFORE any heavy operations
+                        # If document is already in prompt, skip RAG to avoid timeout
+                        has_document_context = (
+                            "## IMPORTANT: USER HAS UPLOADED A DOCUMENT" in chat_request.text or
+                            "## CONTENT FROM UPLOADED DOCUMENT" in chat_request.text or
+                            "Document Content:" in chat_request.text
+                        )
                     
                     # Dossier removed - not needed for this chatbot
                     
