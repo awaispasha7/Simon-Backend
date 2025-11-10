@@ -63,7 +63,6 @@ except Exception as e:
 try:
     from ..ai.models import ai_manager, TaskType
     from ..ai.rag_service import rag_service
-    from ..ai.dossier_extractor import dossier_extractor
     AI_AVAILABLE = True
 except Exception as e:
     print(f"Warning: AI components not available: {e}")
@@ -73,7 +72,6 @@ except Exception as e:
     ai_manager = None
     TaskType = None
     rag_service = None
-    dossier_extractor = None
 
 router = APIRouter()
 
@@ -460,8 +458,7 @@ async def chat(
                         "Document Content:" in chat_request.text
                     )
                     
-                    # REMOVED: Dossier is not required for chat functionality - completely skip it
-                    dossier_context = None
+                    # Dossier removed - not needed for this chatbot
                     
                     # Get RAG context from uploaded documents (with timeout to avoid blocking)
                     # CRITICAL: Skip RAG for simple queries to prevent timeout
@@ -566,10 +563,9 @@ async def chat(
                     print(f"🤖 [AI] Calling AI manager with enhanced prompt...")
                     print(f"🤖 [AI] Conversation history length: {len(conversation_history)} messages")
                     print(f"🤖 [AI] RAG context: {bool(rag_context)}")
-                    print(f"🤖 [AI] Dossier context: {bool(dossier_context)}")
                     print(f"🤖 [AI] Image data: {len(image_data_list)} images")
                     
-                    # Use AI manager for response generation with RAG and dossier context
+                    # Use AI manager for response generation with RAG context
                     # CRITICAL: Use asyncio.wait_for with proper cancellation to prevent timeout
                     # Also reduce max_tokens and add aggressive timeout
                     try:
@@ -582,7 +578,6 @@ async def chat(
                                 user_id=user_id,
                                 project_id=project_id,
                                 rag_context=rag_context,
-                                dossier_context=dossier_context,
                                 image_data=image_data_list,
                                 max_tokens=2000  # Restored to reasonable value for proper responses
                             )
@@ -776,81 +771,6 @@ async def chat(
                     
                     # Start background task - don't await (stream completes immediately)
                     asyncio.create_task(save_and_process_background())
-                    
-                    # Update dossier if needed (after both user and assistant messages are saved)
-                    if dossier_extractor and project_id and len(conversation_history) >= 2:
-                        try:
-                            # Check if we should update the dossier
-                            should_update = await dossier_extractor.should_update_dossier(conversation_history)
-                            if should_update:
-                                print(f"📋 Updating dossier for project {project_id}")
-                                # Extract new metadata from conversation
-                                new_metadata = await dossier_extractor.extract_metadata(conversation_history)
-                                
-                                # Update dossier in database
-                                from ..database.session_service_supabase import session_service
-                                from ..models import DossierUpdate
-                                
-                                dossier_update = DossierUpdate(
-                                    snapshot_json=new_metadata
-                                )
-                                
-                                updated_dossier = session_service.update_dossier(
-                                    UUID(project_id), 
-                                    UUID(user_id), 
-                                    dossier_update
-                                )
-                                
-                                if updated_dossier:
-                                    print(f"✅ Dossier updated: {updated_dossier.title}")
-                                    
-                                    # Check if story is complete and trigger script generation + email
-                                    if ai_manager.is_story_complete(new_metadata):
-                                        print(f"🎬 Story is complete! Generating script and sending email...")
-                                        
-                                        try:
-                                            # Generate video script
-                                            script_response = await ai_manager.generate_response(
-                                                task_type=TaskType.SCRIPT,
-                                                prompt="Generate video script",
-                                                dossier_context=new_metadata
-                                            )
-                                            
-                                            generated_script = script_response.get("response", "Script generation failed")
-                                            print(f"✅ Script generated successfully")
-                                            
-                                            # Send email notification
-                                            from ..services.email_service import email_service
-                                            
-                                            # Get user email and name from environment variables
-                                            user_email = os.getenv("FROM_EMAIL", "user@example.com")
-                                            user_name = os.getenv("USER_NAME", "Story Creator")
-                                            
-                                            # Get client emails (can be multiple, comma-separated)
-                                            client_emails_str = os.getenv("CLIENT_EMAIL", "client@example.com")
-                                            client_emails = [email.strip() for email in client_emails_str.split(",") if email.strip()]
-                                            
-                                            email_sent = await email_service.send_story_captured_email(
-                                                user_email=user_email,
-                                                user_name=user_name,
-                                                story_data=new_metadata,
-                                                generated_script=generated_script,
-                                                project_id=str(project_id),
-                                                client_emails=client_emails
-                                            )
-                                            
-                                            if email_sent:
-                                                print(f"✅ Email notification sent successfully")
-                                            else:
-                                                print(f"⚠️ Email notification failed")
-                                                
-                                        except Exception as e:
-                                            print(f"⚠️ Script generation or email error: {e}")
-                                    
-                                else:
-                                    print(f"⚠️ Failed to update dossier")
-                        except Exception as e:
-                            print(f"⚠️ Dossier update error: {e}")
                     
                     # Store message embeddings for RAG (non-blocking - wait for message_id)
                     if rag_service:

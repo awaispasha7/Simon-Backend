@@ -246,39 +246,7 @@ If document context is provided above, you MUST use it. This is not optional.
                     print(f"⚠️ RAG context present but no combined_context_text found")
                     print(f"⚠️ RAG metadata: {rag_context.get('metadata', {})}")
             
-            # Check for dossier context (existing story data) - Updated for client requirements
-            dossier_context = kwargs.get("dossier_context")
-            dossier_info = ""
-            if dossier_context:
-                dossier_info = "\n\nEXISTING STORY DATA (Slot-based):\n"
-                
-                # Story Frame
-                if dossier_context.get('story_timeframe') and dossier_context.get('story_timeframe') != 'Unknown':
-                    dossier_info += f"Time: {dossier_context['story_timeframe']}\n"
-                if dossier_context.get('story_location') and dossier_context.get('story_location') != 'Unknown':
-                    dossier_info += f"Location: {dossier_context['story_location']}\n"
-                if dossier_context.get('story_world_type') and dossier_context.get('story_world_type') != 'Unknown':
-                    dossier_info += f"World Type: {dossier_context['story_world_type']}\n"
-                
-                # Character (Subject)
-                if dossier_context.get('subject_full_name') and dossier_context.get('subject_full_name') != 'Unknown':
-                    dossier_info += f"Character: {dossier_context['subject_full_name']}\n"
-                if dossier_context.get('subject_relationship_to_writer') and dossier_context.get('subject_relationship_to_writer') != 'Unknown':
-                    dossier_info += f"Relationship: {dossier_context['subject_relationship_to_writer']}\n"
-                
-                # Story Craft
-                if dossier_context.get('problem_statement') and dossier_context.get('problem_statement') != 'Unknown':
-                    dossier_info += f"Problem: {dossier_context['problem_statement']}\n"
-                if dossier_context.get('actions_taken') and dossier_context.get('actions_taken') != 'Unknown':
-                    dossier_info += f"Actions: {dossier_context['actions_taken']}\n"
-                if dossier_context.get('outcome') and dossier_context.get('outcome') != 'Unknown':
-                    dossier_info += f"Outcome: {dossier_context['outcome']}\n"
-                
-                # Technical
-                if dossier_context.get('title') and dossier_context.get('title') != 'Untitled Story':
-                    dossier_info += f"Title: {dossier_context['title']}\n"
-                
-                print(f"📋 Including dossier context: {dossier_context.get('title', 'Untitled')} - {len([k for k, v in dossier_context.items() if v and v != 'Unknown'])} slots filled")
+            # Dossier removed - not needed for this chatbot
             
             # New client: Personal Content Strategist and Scriptwriter (brand‑neutral)
             system_prompt = f"""You are a Personal Content Strategist and Scriptwriter for a professional coach.
