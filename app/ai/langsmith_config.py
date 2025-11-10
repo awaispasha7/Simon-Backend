@@ -26,6 +26,7 @@ except ImportError as e:
 # LangSmith configuration
 LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
 LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT", "simon-chatbot")
+LANGSMITH_WORKSPACE_ID = os.getenv("LANGSMITH_WORKSPACE_ID")  # Required for org-scoped API keys
 LANGSMITH_TRACING_V2 = os.getenv("LANGSMITH_TRACING_V2", "true").lower() == "true"
 
 # Global LangSmith client instance
@@ -44,8 +45,17 @@ def get_langsmith_client() -> Optional[Any]:
     
     if _langsmith_client is None:
         try:
-            _langsmith_client = Client(api_key=LANGSMITH_API_KEY)
+            # For org-scoped API keys, workspace_id is required
+            client_kwargs = {"api_key": LANGSMITH_API_KEY}
+            if LANGSMITH_WORKSPACE_ID:
+                client_kwargs["default_workspace_id"] = LANGSMITH_WORKSPACE_ID
+                # Also set as environment variable for wrap_openai
+                os.environ["LANGSMITH_WORKSPACE_ID"] = LANGSMITH_WORKSPACE_ID
+            
+            _langsmith_client = Client(**client_kwargs)
             print("[OK] LangSmith client initialized")
+            if LANGSMITH_WORKSPACE_ID:
+                print(f"[OK] Using workspace: {LANGSMITH_WORKSPACE_ID}")
         except Exception as e:
             print(f"[WARN] Failed to initialize LangSmith client: {e}")
             return None
@@ -75,24 +85,33 @@ def wrap_openai_client(client: Any) -> Any:
         if wrap_openai is None:
             return client
         
-        # Set project name via environment variable for wrap_openai
-        # wrap_openai reads from LANGSMITH_PROJECT env var automatically
+        # Set project name and workspace via environment variable for wrap_openai
+        # wrap_openai reads from LANGSMITH_PROJECT and LANGSMITH_WORKSPACE_ID env vars automatically
         import os
         original_project = os.getenv("LANGSMITH_PROJECT")
+        original_workspace = os.getenv("LANGSMITH_WORKSPACE_ID")
+        
         os.environ["LANGSMITH_PROJECT"] = LANGSMITH_PROJECT
+        if LANGSMITH_WORKSPACE_ID:
+            os.environ["LANGSMITH_WORKSPACE_ID"] = LANGSMITH_WORKSPACE_ID
         
         try:
             # wrap_openai doesn't take project_name parameter directly
-            # It reads from LANGSMITH_PROJECT environment variable
+            # It reads from LANGSMITH_PROJECT and LANGSMITH_WORKSPACE_ID environment variables
             wrapped = wrap_openai(client)
             print("[OK] OpenAI client wrapped with LangSmith tracing")
             return wrapped
         finally:
-            # Restore original project if it was set
+            # Restore original values if they were set
             if original_project:
                 os.environ["LANGSMITH_PROJECT"] = original_project
             elif "LANGSMITH_PROJECT" in os.environ:
                 del os.environ["LANGSMITH_PROJECT"]
+            
+            if original_workspace:
+                os.environ["LANGSMITH_WORKSPACE_ID"] = original_workspace
+            elif "LANGSMITH_WORKSPACE_ID" in os.environ and not LANGSMITH_WORKSPACE_ID:
+                del os.environ["LANGSMITH_WORKSPACE_ID"]
                 
     except Exception as e:
         print(f"[WARN] Failed to wrap OpenAI client with LangSmith: {e}")
@@ -127,13 +146,20 @@ def create_trace(
             from contextlib import nullcontext
             return nullcontext()
         
-        return tracing_context(
-            project_name=LANGSMITH_PROJECT,
-            name=name,
-            run_type=run_type,
-            tags=tags or [],
-            metadata=metadata or {}
-        )
+        # Build kwargs for tracing_context
+        trace_kwargs = {
+            "project_name": LANGSMITH_PROJECT,
+            "name": name,
+            "run_type": run_type,
+            "tags": tags or [],
+            "metadata": metadata or {}
+        }
+        
+        # Add workspace_id if provided (required for org-scoped API keys)
+        if LANGSMITH_WORKSPACE_ID:
+            trace_kwargs["workspace_id"] = LANGSMITH_WORKSPACE_ID
+        
+        return tracing_context(**trace_kwargs)
     except Exception as e:
         print(f"[WARN] Failed to create LangSmith trace: {e}")
         from contextlib import nullcontext
@@ -163,12 +189,19 @@ def trace_function(
         return noop_decorator
     
     try:
-        return traceable(
-            name=name,
-            project_name=LANGSMITH_PROJECT,
-            run_type=run_type,
-            tags=tags or []
-        )
+        # Build kwargs for traceable
+        traceable_kwargs = {
+            "name": name,
+            "project_name": LANGSMITH_PROJECT,
+            "run_type": run_type,
+            "tags": tags or []
+        }
+        
+        # Add workspace_id if provided (required for org-scoped API keys)
+        if LANGSMITH_WORKSPACE_ID:
+            traceable_kwargs["workspace_id"] = LANGSMITH_WORKSPACE_ID
+        
+        return traceable(**traceable_kwargs)
     except Exception as e:
         print(f"[WARN] Failed to create LangSmith trace decorator: {e}")
         def noop_decorator(func):

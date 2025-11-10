@@ -15,8 +15,12 @@ git rm --cached .env
 ```env
 LANGSMITH_API_KEY=lsv2_pt_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  # Your REAL key
 LANGSMITH_PROJECT=default
+LANGSMITH_WORKSPACE_ID=your_workspace_id  # Required if API key is org-scoped (lsv2_sk_)
 LANGSMITH_TRACING_V2=true
 ```
+
+**Important:** If your API key starts with `lsv2_sk_` (org-scoped), you MUST also set `LANGSMITH_WORKSPACE_ID`.
+Find your workspace ID in LangSmith dashboard → Settings → Workspace.
 
 **⚠️ DO NOT commit this file!** It's already in `.gitignore`.
 
@@ -41,6 +45,7 @@ git push origin main
 ```
 LANGSMITH_API_KEY = lsv2_pt_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 LANGSMITH_PROJECT = default
+LANGSMITH_WORKSPACE_ID = your_workspace_id  # Required if API key is org-scoped (lsv2_sk_)
 LANGSMITH_TRACING_V2 = true
 ```
 

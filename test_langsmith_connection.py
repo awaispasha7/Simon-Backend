@@ -20,10 +20,12 @@ print()
 # Check environment variables
 api_key = os.getenv("LANGSMITH_API_KEY")
 project = os.getenv("LANGSMITH_PROJECT", "default")
+workspace_id = os.getenv("LANGSMITH_WORKSPACE_ID")
 tracing = os.getenv("LANGSMITH_TRACING_V2", "true")
 
 print("1. Environment Variables:")
 print(f"   LANGSMITH_API_KEY: {'[OK] Set' if api_key else '[ERROR] NOT SET'}")
+is_org_scoped = False
 if api_key:
     if api_key == "your_api_key_here":
         print("   [WARN] Still using placeholder value!")
@@ -32,9 +34,18 @@ if api_key:
         print(f"   Current: {api_key[:20]}...")
     else:
         key_type = "Project Token" if api_key.startswith("lsv2_pt_") else "Secret Key"
+        is_org_scoped = api_key.startswith("lsv2_sk_")
         print(f"   [OK] Format looks correct ({key_type}): {api_key[:15]}...")
+        if is_org_scoped:
+            print("   [INFO] This is an org-scoped key - workspace_id is required")
 
 print(f"   LANGSMITH_PROJECT: {project}")
+print(f"   LANGSMITH_WORKSPACE_ID: {'[OK] Set' if workspace_id else '[WARN] NOT SET'}")
+if is_org_scoped and not workspace_id:
+    print("   [ERROR] Workspace ID is REQUIRED for org-scoped API keys!")
+    print("   -> Find it in LangSmith dashboard → Settings → Workspace")
+elif workspace_id:
+    print(f"   [OK] Workspace ID: {workspace_id[:20]}...")
 print(f"   LANGSMITH_TRACING_V2: {tracing}")
 print()
 
@@ -45,11 +56,13 @@ try:
         is_langsmith_enabled,
         get_langsmith_client,
         LANGSMITH_PROJECT,
-        LANGSMITH_API_KEY
+        LANGSMITH_API_KEY,
+        LANGSMITH_WORKSPACE_ID
     )
     print("   [OK] LangSmith module imported successfully")
     print(f"   Project from config: {LANGSMITH_PROJECT}")
     print(f"   API Key in config: {'[OK] Set' if LANGSMITH_API_KEY else '[ERROR] NOT SET'}")
+    print(f"   Workspace ID in config: {'[OK] Set' if LANGSMITH_WORKSPACE_ID else '[WARN] NOT SET'}")
 except ImportError as e:
     print(f"   [ERROR] Failed to import: {e}")
     print("   -> Run: pip install langsmith")
@@ -110,12 +123,18 @@ print("=" * 60)
 print("Summary:")
 print("=" * 60)
 
-if api_key and (api_key.startswith("lsv2_pt_") or api_key.startswith("lsv2_sk_")) and is_langsmith_enabled():
+# Check if org-scoped key needs workspace
+needs_workspace = api_key and api_key.startswith("lsv2_sk_") and not workspace_id
+config_ok = api_key and (api_key.startswith("lsv2_pt_") or api_key.startswith("lsv2_sk_")) and is_langsmith_enabled() and not needs_workspace
+
+if config_ok:
     print("[OK] Configuration looks good!")
     print()
     print("Next steps:")
     print("1. Make sure this matches your LangSmith dashboard project name:")
     print(f"   Project: '{project}'")
+    if workspace_id:
+        print(f"   Workspace: '{workspace_id[:20]}...'")
     print("2. Send a test message through your chatbot")
     print("3. Wait 10-30 seconds")
     print("4. Check LangSmith dashboard: https://smith.langchain.com")
@@ -126,6 +145,9 @@ else:
         print("   - LANGSMITH_API_KEY not set")
     elif not (api_key.startswith("lsv2_pt_") or api_key.startswith("lsv2_sk_")):
         print("   - LANGSMITH_API_KEY format incorrect (should start with 'lsv2_pt_' or 'lsv2_sk_')")
+    if needs_workspace:
+        print("   - LANGSMITH_WORKSPACE_ID is REQUIRED for org-scoped API keys (lsv2_sk_*)")
+        print("   - Find it in LangSmith dashboard → Settings → Workspace")
     if not is_langsmith_enabled():
         print("   - LangSmith not enabled")
     print()

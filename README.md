@@ -47,6 +47,7 @@ A FastAPI-based backend service for the Simon Chatbot personal AI assistant appl
    # LangSmith Monitoring (Optional but recommended)
    LANGSMITH_API_KEY=your_langsmith_api_key
    LANGSMITH_PROJECT=simon-chatbot
+   LANGSMITH_WORKSPACE_ID=your_workspace_id  # Required if API key is org-scoped (lsv2_sk_)
    LANGSMITH_TRACING_V2=true
    ```
 
@@ -260,7 +261,10 @@ backend/
 | `ANTHROPIC_API_KEY` | Your Anthropic Claude API key | Yes |
 | `LANGSMITH_API_KEY` | Your LangSmith API key for monitoring | No |
 | `LANGSMITH_PROJECT` | LangSmith project name (defaults to "simon-chatbot") | No |
+| `LANGSMITH_WORKSPACE_ID` | LangSmith workspace ID (required for org-scoped API keys) | No* |
 | `LANGSMITH_TRACING_V2` | Enable LangSmith tracing v2 (defaults to "true") | No |
+
+\* Required if your API key is org-scoped (starts with `lsv2_sk_`)
 
 ### LangSmith Setup (Optional)
 
@@ -275,8 +279,12 @@ LangSmith provides monitoring and observability for your AI operations. To enabl
    ```env
    LANGSMITH_API_KEY=lsv2_pt_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
    LANGSMITH_PROJECT=simon-chatbot
+   LANGSMITH_WORKSPACE_ID=your_workspace_id  # Required if API key is org-scoped (lsv2_sk_)
    LANGSMITH_TRACING_V2=true
    ```
+   
+   **Note:** If your API key starts with `lsv2_sk_` (org-scoped), you must also set `LANGSMITH_WORKSPACE_ID`. 
+   You can find your workspace ID in LangSmith dashboard → Settings → Workspace.
 
 3. **What gets monitored:**
    - All OpenAI chat completions (with full prompts and responses)

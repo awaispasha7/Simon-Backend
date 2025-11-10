@@ -41,13 +41,21 @@
    ```env
    LANGSMITH_API_KEY=lsv2_pt_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
    ```
-   - Should start with `lsv2_pt_`
+   - Should start with `lsv2_pt_` (project token) or `lsv2_sk_` (org-scoped secret key)
    - Should be your actual key (not "your_api_key_here")
+   - **If your key starts with `lsv2_sk_`**, you MUST also set `LANGSMITH_WORKSPACE_ID`
 
 3. **Check project name:**
    ```env
    LANGSMITH_PROJECT=default
    ```
+
+4. **If using org-scoped key (lsv2_sk_*), add workspace ID:**
+   ```env
+   LANGSMITH_WORKSPACE_ID=your_workspace_id
+   ```
+   - Find it in LangSmith dashboard → Settings → Workspace
+   - Required for org-scoped API keys
    - Should match the project name in LangSmith dashboard
 
 #### For Production (Vercel):
@@ -56,8 +64,9 @@
    - Your Project → Settings → Environment Variables
 
 2. **Verify these variables exist:**
-   - `LANGSMITH_API_KEY` = `lsv2_pt_...` (your real key)
+   - `LANGSMITH_API_KEY` = `lsv2_pt_...` or `lsv2_sk_...` (your real key)
    - `LANGSMITH_PROJECT` = `default`
+   - `LANGSMITH_WORKSPACE_ID` = `your_workspace_id` (required if API key is `lsv2_sk_*`)
    - `LANGSMITH_TRACING_V2` = `true`
 
 3. **Check environment scope:**
@@ -205,7 +214,8 @@ if is_langsmith_enabled():
 ## ✅ Quick Verification Checklist
 
 - [ ] `LANGSMITH_API_KEY` is set (not "your_api_key_here")
-- [ ] API key starts with `lsv2_pt_`
+- [ ] API key starts with `lsv2_pt_` or `lsv2_sk_`
+- [ ] If API key starts with `lsv2_sk_`, `LANGSMITH_WORKSPACE_ID` is set
 - [ ] `LANGSMITH_PROJECT` matches dashboard project name
 - [ ] Server logs show `[OK] LangSmith monitoring enabled`
 - [ ] Vercel environment variables are set (if production)
