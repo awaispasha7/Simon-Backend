@@ -832,132 +832,131 @@ async def chat(
                         
                         # Don't await - run in background
                         asyncio.create_task(store_assistant_embedding())
-                    
-                else:
-                    # Fallback response if AI is not available
-                    print("[CHAT] WARNING: AI not available, using fallback response")
-                    fallback_response = "I'm sorry, I'm having trouble connecting to my AI backend right now. Please try again in a moment."
-                    
-                    # Send session metadata first (so frontend can store it)
-                    metadata_chunk = {
-                        "type": "metadata",
-                        "metadata": {
-                            "session_id": str(session_id),
-                            "project_id": str(project_id) if project_id else None,
-                            "user_id": str(user_id)
+                    else:
+                        # Fallback response if AI is not available
+                        print("[CHAT] WARNING: AI not available, using fallback response")
+                        fallback_response = "I'm sorry, I'm having trouble connecting to my AI backend right now. Please try again in a moment."
+                        
+                        # Send session metadata first (so frontend can store it)
+                        metadata_chunk = {
+                            "type": "metadata",
+                            "metadata": {
+                                "session_id": str(session_id),
+                                "project_id": str(project_id) if project_id else None,
+                                "user_id": str(user_id)
+                            }
                         }
-                    }
-                    yield f"data: {json.dumps(metadata_chunk)}\n\n"
+                        yield f"data: {json.dumps(metadata_chunk)}\n\n"
+                        
+                        # Stream fallback response in sentence chunks (same as success path)
+                        sentences = re.split(r'([.!?]\s+)', fallback_response)
+                        sentence_chunks = []
+                        for i in range(0, len(sentences) - 1, 2):
+                            if i + 1 < len(sentences):
+                                combined = sentences[i] + sentences[i + 1]
+                                if combined.strip():
+                                    sentence_chunks.append(combined)
+                            else:
+                                if sentences[i].strip():
+                                    sentence_chunks.append(sentences[i])
+                        if len(sentences) % 2 == 1 and sentences[-1].strip():
+                            sentence_chunks.append(sentences[-1])
+                        
+                        if not sentence_chunks:
+                            sentence_chunks = [fallback_response]
+                        
+                        print(f"[CHAT] Streaming fallback: {len(sentence_chunks)} chunks")
+                        
+                        for i, chunk in enumerate(sentence_chunks):
+                            if not chunk.strip():
+                                continue
+                            chunk_data = {
+                                "type": "content",
+                                "content": chunk,
+                                "chunk": i + 1,
+                                "done": i == len(sentence_chunks) - 1
+                            }
+                            yield f"data: {json.dumps(chunk_data)}\n\n"
+                            if i < len(sentence_chunks) - 1:
+                                await asyncio.sleep(0.01)
+                        
+                        # Save fallback response
+                        fallback_message_id = await _save_message(
+                            session_id=str(session_id),
+                            user_id=str(user_id),
+                            role="assistant",
+                            content=fallback_response,
+                            metadata={"is_authenticated": is_authenticated, "fallback": True}
+                        )
+                        
+                        # Store fallback message embedding for RAG
+                        if rag_service and fallback_message_id:
+                            try:
+                                # Use consistent user_id for RAG (same as storage)
+                                rag_user_id = UUID(user_id) if is_authenticated else UUID(session_id)
+                                await rag_service.embed_and_store_message(
+                                    message_id=UUID(fallback_message_id),
+                                    user_id=rag_user_id,
+                                    project_id=UUID(project_id) if project_id else None,
+                                    session_id=UUID(session_id),
+                                    content=fallback_response,
+                                    role="assistant",
+                                    metadata={"is_authenticated": is_authenticated, "fallback": True, "original_user_id": str(user_id)}
+                                )
+                                print(f"📚 Stored fallback message embedding: {fallback_message_id}")
+                            except Exception as e:
+                                print(f"⚠️ Failed to store fallback message embedding: {e}")
                     
-                    # Stream fallback response in sentence chunks (same as success path)
-                    sentences = re.split(r'([.!?]\s+)', fallback_response)
+                    # Update session last message time (non-blocking to prevent timeout)
+                    async def update_session_background():
+                        try:
+                            await asyncio.wait_for(
+                                _update_session_activity(str(session_id)),
+                                timeout=1.0
+                            )
+                        except Exception as e:
+                            print(f"⚠️ Failed to update session activity: {e}")
+                    
+                    asyncio.create_task(update_session_background())
+                    
+                except Exception as e:
+                    print(f"Error in chat generation: {e}")
+                    error_response = f"I apologize, but I'm having trouble generating a response right now. Please try again later."
+                    
+                    # Stream error response in sentence chunks (same as success path)
+                    sentences = re.split(r'([.!?]\s+)', error_response)
                     sentence_chunks = []
                     for i in range(0, len(sentences) - 1, 2):
                         if i + 1 < len(sentences):
-                            combined = sentences[i] + sentences[i + 1]
-                            if combined.strip():
-                                sentence_chunks.append(combined)
+                            sentence_chunks.append(sentences[i] + sentences[i + 1])
                         else:
-                            if sentences[i].strip():
-                                sentence_chunks.append(sentences[i])
-                    if len(sentences) % 2 == 1 and sentences[-1].strip():
+                            sentence_chunks.append(sentences[i])
+                    if len(sentences) % 2 == 1:
                         sentence_chunks.append(sentences[-1])
                     
-                    if not sentence_chunks:
-                        sentence_chunks = [fallback_response]
-                    
-                    print(f"[CHAT] Streaming fallback: {len(sentence_chunks)} chunks")
+                    if len(sentence_chunks) <= 1:
+                        sentence_chunks = error_response.split('\n')
+                        if len(sentence_chunks) <= 1:
+                            words = error_response.split()
+                            sentence_chunks = []
+                            chunk_size = 20
+                            for i in range(0, len(words), chunk_size):
+                                chunk = ' '.join(words[i:i + chunk_size])
+                                if i + chunk_size < len(words):
+                                    chunk += ' '
+                                sentence_chunks.append(chunk)
                     
                     for i, chunk in enumerate(sentence_chunks):
-                        if not chunk.strip():
-                            continue
                         chunk_data = {
                             "type": "content",
                             "content": chunk,
                             "chunk": i + 1,
-                            "done": i == len(sentence_chunks) - 1
+                            "done": i == len(sentence_chunks) - 1,
+                            "error": True
                         }
                         yield f"data: {json.dumps(chunk_data)}\n\n"
                         if i < len(sentence_chunks) - 1:
                             await asyncio.sleep(0.01)
-                    
-                    # Save fallback response
-                    fallback_message_id = await _save_message(
-                        session_id=str(session_id),
-                        user_id=str(user_id),
-                        role="assistant",
-                        content=fallback_response,
-                        metadata={"is_authenticated": is_authenticated, "fallback": True}
-                    )
-                    
-                    # Store fallback message embedding for RAG
-                    if rag_service and fallback_message_id:
-                        try:
-                            # Use consistent user_id for RAG (same as storage)
-                            rag_user_id = UUID(user_id) if is_authenticated else UUID(session_id)
-                            await rag_service.embed_and_store_message(
-                                message_id=UUID(fallback_message_id),
-                                user_id=rag_user_id,
-                                project_id=UUID(project_id) if project_id else None,
-                                session_id=UUID(session_id),
-                                content=fallback_response,
-                                role="assistant",
-                                metadata={"is_authenticated": is_authenticated, "fallback": True, "original_user_id": str(user_id)}
-                            )
-                            print(f"📚 Stored fallback message embedding: {fallback_message_id}")
-                        except Exception as e:
-                            print(f"⚠️ Failed to store fallback message embedding: {e}")
-                
-                # Update session last message time (non-blocking to prevent timeout)
-                async def update_session_background():
-                    try:
-                        await asyncio.wait_for(
-                            _update_session_activity(str(session_id)),
-                            timeout=1.0
-                        )
-                    except Exception as e:
-                        print(f"⚠️ Failed to update session activity: {e}")
-                
-                asyncio.create_task(update_session_background())
-                
-            except Exception as e:
-                print(f"Error in chat generation: {e}")
-                error_response = f"I apologize, but I'm having trouble generating a response right now. Please try again later."
-                
-                # Stream error response in sentence chunks (same as success path)
-                sentences = re.split(r'([.!?]\s+)', error_response)
-                sentence_chunks = []
-                for i in range(0, len(sentences) - 1, 2):
-                    if i + 1 < len(sentences):
-                        sentence_chunks.append(sentences[i] + sentences[i + 1])
-                    else:
-                        sentence_chunks.append(sentences[i])
-                if len(sentences) % 2 == 1:
-                    sentence_chunks.append(sentences[-1])
-                
-                if len(sentence_chunks) <= 1:
-                    sentence_chunks = error_response.split('\n')
-                    if len(sentence_chunks) <= 1:
-                        words = error_response.split()
-                        sentence_chunks = []
-                        chunk_size = 20
-                        for i in range(0, len(words), chunk_size):
-                            chunk = ' '.join(words[i:i + chunk_size])
-                            if i + chunk_size < len(words):
-                                chunk += ' '
-                            sentence_chunks.append(chunk)
-                
-                for i, chunk in enumerate(sentence_chunks):
-                    chunk_data = {
-                        "type": "content",
-                        "content": chunk,
-                        "chunk": i + 1,
-                        "done": i == len(sentence_chunks) - 1,
-                        "error": True
-                    }
-                    yield f"data: {json.dumps(chunk_data)}\n\n"
-                    if i < len(sentence_chunks) - 1:
-                        await asyncio.sleep(0.01)
         
         return StreamingResponse(
             generate_stream(),
