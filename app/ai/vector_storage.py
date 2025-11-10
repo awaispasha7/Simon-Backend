@@ -8,6 +8,18 @@ from uuid import UUID, uuid4
 from datetime import datetime
 from ..database.supabase import get_supabase_client
 
+# LangSmith tracing
+try:
+    from langsmith import traceable
+    LANGSMITH_AVAILABLE = True
+except ImportError:
+    LANGSMITH_AVAILABLE = False
+    # Create a no-op decorator
+    def traceable(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
 
 class VectorStorageService:
     """Service for storing and managing embeddings in Supabase"""
@@ -72,7 +84,7 @@ class VectorStorageService:
             print(f"ERROR: Failed to store message embedding: {e}")
             return None
     
-    async def get_similar_user_messages(
+    async def _get_similar_user_messages_impl(
         self,
         query_embedding: List[float],
         user_id: UUID,
@@ -81,17 +93,7 @@ class VectorStorageService:
         similarity_threshold: float = 0.7
     ) -> List[Dict[str, Any]]:
         """
-        Retrieve similar messages for a user using vector similarity search
-        
-        Args:
-            query_embedding: Query embedding vector
-            user_id: ID of the user
-            project_id: Optional project ID to filter by
-            match_count: Maximum number of results
-            similarity_threshold: Minimum similarity score (0-1)
-            
-        Returns:
-            List of similar messages with similarity scores
+        Internal implementation of user message retrieval
         """
         try:
             # Call the Supabase function
@@ -118,11 +120,41 @@ class VectorStorageService:
                 print("INFO: No similar user messages found")
                 return []
                 
-        except Exception as e:
-            print(f"ERROR: Failed to retrieve similar user messages: {e}")
-            return []
+            except Exception as e:
+                print(f"ERROR: Failed to retrieve similar user messages: {e}")
+                return []
     
-    async def get_similar_global_knowledge(
+    @traceable(run_type="retriever", name="VectorStoreRetriever_user_messages")
+    async def get_similar_user_messages(
+        self,
+        query_embedding: List[float],
+        user_id: UUID,
+        project_id: Optional[UUID] = None,
+        match_count: int = 10,
+        similarity_threshold: float = 0.7
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve similar messages for a user using vector similarity search
+        
+        Args:
+            query_embedding: Query embedding vector
+            user_id: ID of the user
+            project_id: Optional project ID to filter by
+            match_count: Maximum number of results
+            similarity_threshold: Minimum similarity score (0-1)
+            
+        Returns:
+            List of similar messages with similarity scores
+        """
+        return await self._get_similar_user_messages_impl(
+            query_embedding=query_embedding,
+            user_id=user_id,
+            project_id=project_id,
+            match_count=match_count,
+            similarity_threshold=similarity_threshold
+        )
+    
+    async def _get_similar_global_knowledge_impl(
         self,
         query_embedding: List[float],
         match_count: int = 5,
@@ -130,16 +162,7 @@ class VectorStorageService:
         min_quality_score: float = 0.6
     ) -> List[Dict[str, Any]]:
         """
-        Retrieve similar patterns from global knowledge base
-        
-        Args:
-            query_embedding: Query embedding vector
-            match_count: Maximum number of results
-            similarity_threshold: Minimum similarity score (0-1)
-            min_quality_score: Minimum quality score (0-1)
-            
-        Returns:
-            List of similar knowledge patterns with similarity scores
+        Internal implementation of global knowledge retrieval
         """
         try:
             result = self.supabase.rpc(
@@ -162,6 +185,33 @@ class VectorStorageService:
         except Exception as e:
             print(f"ERROR: Failed to retrieve similar global knowledge: {e}")
             return []
+    
+    @traceable(run_type="retriever", name="VectorStoreRetriever_global_knowledge")
+    async def get_similar_global_knowledge(
+        self,
+        query_embedding: List[float],
+        match_count: int = 5,
+        similarity_threshold: float = 0.7,
+        min_quality_score: float = 0.6
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve similar patterns from global knowledge base
+        
+        Args:
+            query_embedding: Query embedding vector
+            match_count: Maximum number of results
+            similarity_threshold: Minimum similarity score (0-1)
+            min_quality_score: Minimum quality score (0-1)
+            
+        Returns:
+            List of similar knowledge patterns with similarity scores
+        """
+        return await self._get_similar_global_knowledge_impl(
+            query_embedding=query_embedding,
+            match_count=match_count,
+            similarity_threshold=similarity_threshold,
+            min_quality_score=min_quality_score
+        )
     
     async def store_global_knowledge(
         self,

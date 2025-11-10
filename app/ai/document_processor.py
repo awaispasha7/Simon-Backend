@@ -30,10 +30,15 @@ from ..database.supabase import get_supabase_client
 
 # LangSmith integration
 try:
+    from langsmith import traceable
     from .langsmith_config import create_trace
     LANGSMITH_AVAILABLE = True
 except ImportError:
     LANGSMITH_AVAILABLE = False
+    def traceable(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
     def create_trace(*args, **kwargs):
         from contextlib import nullcontext
         return nullcontext()
@@ -350,7 +355,7 @@ class DocumentProcessor:
         except Exception as e:
             print(f"❌ Error updating asset status: {e}")
     
-    async def get_document_context(
+    async def _get_document_context_impl(
         self,
         query_embedding: List[float],
         user_id: UUID,
@@ -359,17 +364,7 @@ class DocumentProcessor:
         similarity_threshold: float = 0.7
     ) -> List[Dict[str, Any]]:
         """
-        Retrieve relevant document chunks for RAG context
-        
-        Args:
-            query_embedding: Query embedding vector
-            user_id: ID of the user
-            project_id: Optional project ID to filter by
-            match_count: Maximum number of chunks to retrieve
-            similarity_threshold: Minimum similarity score
-            
-        Returns:
-            List of relevant document chunks
+        Internal implementation of document context retrieval
         """
         try:
             if not self.supabase:
@@ -443,6 +438,36 @@ class DocumentProcessor:
         except Exception as e:
             print(f"❌ Error retrieving document context: {e}")
             return []
+    
+    @traceable(run_type="retriever", name="VectorStoreRetriever_documents")
+    async def get_document_context(
+        self,
+        query_embedding: List[float],
+        user_id: UUID,
+        project_id: Optional[UUID] = None,
+        match_count: int = 5,
+        similarity_threshold: float = 0.7
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve relevant document chunks for RAG context
+        
+        Args:
+            query_embedding: Query embedding vector
+            user_id: ID of the user
+            project_id: Optional project ID to filter by
+            match_count: Maximum number of chunks to retrieve
+            similarity_threshold: Minimum similarity score
+            
+        Returns:
+            List of relevant document chunks
+        """
+        return await self._get_document_context_impl(
+            query_embedding=query_embedding,
+            user_id=user_id,
+            project_id=project_id,
+            match_count=match_count,
+            similarity_threshold=similarity_threshold
+        )
 
 
 # Global singleton instance
