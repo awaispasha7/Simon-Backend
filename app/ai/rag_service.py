@@ -32,6 +32,42 @@ class RAGService:
             self.embedding_service = get_embedding_service()
         return self.embedding_service
     
+    def _expand_brand_query(self, query: str) -> str:
+        """
+        Expand generic queries about the user/brand to include relevant keywords
+        This helps match against brand documents (niche, ICP, tone, etc.)
+        
+        Args:
+            query: Original user query
+            
+        Returns:
+            Expanded query with brand-related keywords
+        """
+        query_lower = query.lower()
+        
+        # Check if query is asking about the user/brand
+        is_personal_query = any(phrase in query_lower for phrase in [
+            "what do you know about me",
+            "who am i",
+            "what's my",
+            "what is my",
+            "tell me about me",
+            "my niche",
+            "my brand",
+            "my audience",
+            "my target",
+            "my tone",
+            "my voice",
+            "my style"
+        ])
+        
+        if is_personal_query:
+            # Expand with brand-related keywords to improve document matching
+            brand_keywords = "niche target audience ICP ideal customer profile brand identity tone voice writing style content pillars storytelling rules hook formulas CTA call to action"
+            return f"{query} {brand_keywords}"
+        
+        return query
+    
     async def get_rag_context(
         self,
         user_message: str,
