@@ -9,6 +9,11 @@ from datetime import datetime
 from ..database.supabase import get_supabase_client
 
 # LangSmith tracing
+# @traceable decorator automatically reads from environment variables:
+# - LANGSMITH_TRACING=true (required)
+# - LANGSMITH_API_KEY (required)
+# - LANGSMITH_PROJECT (optional, defaults to "default")
+# - LANGSMITH_WORKSPACE_ID (optional, only for multi-workspace API keys)
 try:
     from langsmith import traceable
     LANGSMITH_AVAILABLE = True

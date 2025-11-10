@@ -29,6 +29,11 @@ from .vector_storage import vector_storage
 from ..database.supabase import get_supabase_client
 
 # LangSmith integration
+# @traceable decorator automatically reads from environment variables:
+# - LANGSMITH_TRACING=true (required)
+# - LANGSMITH_API_KEY (required)
+# - LANGSMITH_PROJECT (optional, defaults to "default")
+# - LANGSMITH_WORKSPACE_ID (optional, only for multi-workspace API keys)
 try:
     from langsmith import traceable
     from .langsmith_config import create_trace
