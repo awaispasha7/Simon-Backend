@@ -34,37 +34,55 @@ class RAGService:
     
     def _expand_brand_query(self, query: str) -> str:
         """
-        Expand generic queries about the user/brand to include relevant keywords
-        This helps match against brand documents (niche, ICP, tone, etc.)
+        Expand queries to include relevant keywords based on document use cases
+        This helps match against the right brand documents (Avatar Sheet, Script guides, etc.)
         
         Args:
             query: Original user query
             
         Returns:
-            Expanded query with brand-related keywords
+            Expanded query with relevant keywords for document matching
         """
         query_lower = query.lower()
         
-        # Check if query is asking about the user/brand
-        is_personal_query = any(phrase in query_lower for phrase in [
-            "what do you know about me",
-            "who am i",
-            "what's my",
-            "what is my",
-            "tell me about me",
-            "my niche",
-            "my brand",
-            "my audience",
-            "my target",
-            "my tone",
-            "my voice",
-            "my style"
-        ])
+        # Map queries to specific document types
+        # Avatar Sheet / ICP queries
+        if any(phrase in query_lower for phrase in [
+            "who are my", "who is my", "my niche", "my audience", "my target", "potential clients",
+            "ideal customer", "target audience", "who do i", "who should i"
+        ]):
+            return f"{query} avatar sheet ICP ideal customer profile target audience potential clients niche demographics psychographics"
         
-        if is_personal_query:
-            # Expand with brand-related keywords to improve document matching
-            brand_keywords = "niche target audience ICP ideal customer profile brand identity tone voice writing style content pillars storytelling rules hook formulas CTA call to action"
-            return f"{query} {brand_keywords}"
+        # Script/Storytelling queries
+        if any(phrase in query_lower for phrase in [
+            "script", "hook", "cta", "story", "video", "content", "create", "write", "generate"
+        ]):
+            return f"{query} script structure hook formulas CTA call to action storytelling rules content creation"
+        
+        # Tone/Style queries
+        if any(phrase in query_lower for phrase in [
+            "tone", "voice", "style", "how do i write", "writing style", "how should i"
+        ]):
+            return f"{query} tone voice writing style brand identity north star brand vision"
+        
+        # Content strategy queries
+        if any(phrase in query_lower for phrase in [
+            "content strategy", "weekly", "ideas", "plan", "calendar", "content plan"
+        ]):
+            return f"{query} content strategy content pillars weekly planning content ideas"
+        
+        # Carousel queries
+        if any(phrase in query_lower for phrase in [
+            "carousel", "slides", "post", "instagram post"
+        ]):
+            return f"{query} carousel rules carousel structure slides headline"
+        
+        # General personal/brand queries
+        if any(phrase in query_lower for phrase in [
+            "what do you know about me", "who am i", "what's my", "what is my",
+            "tell me about me", "my brand"
+        ]):
+            return f"{query} niche target audience ICP ideal customer profile brand identity tone voice writing style content pillars storytelling rules hook formulas CTA call to action"
         
         return query
     
@@ -243,24 +261,43 @@ class RAGService:
         # Add document context - CRITICAL: This is the brand documents (North Star, ICP, rules, etc.)
         if document_context:
             context_parts.append("## 🔴 BRAND DOCUMENTS - CRITICAL INFORMATION:")
-            context_parts.append("This section contains information from uploaded brand documents including:")
-            context_parts.append("- North Star / Brand Vision")
-            context_parts.append("- ICP (Ideal Customer Profile) / Target Audience")
-            context_parts.append("- Storytelling Rules & Guidelines")
-            context_parts.append("- Hook Formulas & Structures")
-            context_parts.append("- Content Pillars & Themes")
-            context_parts.append("- Tone, Voice, and Writing Style Guidelines")
             context_parts.append("")
-            context_parts.append("USE THIS INFORMATION TO ANSWER ALL BRAND-RELATED QUESTIONS.")
+            context_parts.append("YOU MUST USE THIS INFORMATION TO ANSWER ALL QUESTIONS ABOUT:")
+            context_parts.append("- Brand identity, niche, target audience, potential clients")
+            context_parts.append("- Tone, voice, writing style, sentence rhythm, emotional pacing")
+            context_parts.append("- Storytelling rules, hook formulas, content pillars")
+            context_parts.append("- Script structure, CTA formats, carousel rules")
+            context_parts.append("- Audience fears, desires, struggles")
             context_parts.append("")
+            context_parts.append("DOCUMENT USE CASES:")
+            context_parts.append("- Avatar Sheet / ICP Document: Use for questions about potential clients, target audience, niche")
+            context_parts.append("- Script/Storytelling Documents: Use for script creation, hooks, CTAs, storytelling structure")
+            context_parts.append("- Content Strategy Documents: Use for content ideas, weekly planning, content pillars")
+            context_parts.append("- Carousel Documents: Use for carousel creation rules and structure")
+            context_parts.append("- North Star / Brand Vision: Use for brand identity, tone, voice, overall approach")
+            context_parts.append("")
+            context_parts.append("WHEN ANSWERING QUESTIONS:")
+            context_parts.append("1. If asked about niche/clients/audience → Use Avatar Sheet / ICP document")
+            context_parts.append("2. If asked to create scripts → Use Script/Storytelling documents for structure and rules")
+            context_parts.append("3. If asked about tone/style → Use North Star / Brand Vision documents")
+            context_parts.append("4. If asked about content strategy → Use Content Strategy documents")
+            context_parts.append("5. ALWAYS apply the rules and guidelines from these documents to your outputs")
+            context_parts.append("")
+            context_parts.append("DOCUMENT CONTENT:")
             for i, item in enumerate(document_context, 1):
                 doc_type = item.get('document_type', 'unknown')
                 chunk_text = item.get('chunk_text', '')
                 similarity = item.get('similarity', 0)
-                # Include MORE chunk text for better context (up to 800 chars for brand docs)
-                context_parts.append(
-                    f"{i}. [{doc_type.upper()}] (relevance: {similarity:.2f})\n{chunk_text[:800]}"
-                )
+                metadata = item.get('metadata', {})
+                filename = metadata.get('filename', 'Unknown Document')
+                
+                # Include document filename to help AI understand which document this is
+                context_parts.append(f"--- Document {i}: {filename} ({doc_type.upper()}, relevance: {similarity:.2f}) ---")
+                # Include MORE chunk text for better context (up to 1000 chars for brand docs)
+                context_parts.append(chunk_text[:1000])
+                context_parts.append("")
+            context_parts.append("")
+            context_parts.append("REMEMBER: This information is from Simon's uploaded brand documents. Use it directly to answer questions.")
             context_parts.append("")
         
         # Add global knowledge context
