@@ -14,12 +14,24 @@ try:
     from langchain_core.callbacks import CallbackManagerForRetrieverRun
     from langchain_openai import OpenAIEmbeddings
     LANGCHAIN_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     LANGCHAIN_AVAILABLE = False
     BaseRetriever = None
     Document = None
     CallbackManagerForRetrieverRun = None
     OpenAIEmbeddings = None
+    print(f"[WARN] LangChain not available: {e}")
+
+# LangSmith tracing (explicit for custom retrievers)
+try:
+    from langsmith import traceable
+    LANGSMITH_TRACEABLE_AVAILABLE = True
+except ImportError:
+    LANGSMITH_TRACEABLE_AVAILABLE = False
+    def traceable(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
 
 from ..database.supabase import get_supabase_client
 
@@ -51,6 +63,10 @@ class SupabaseMessageRetriever(BaseRetriever):
             openai_api_key=os.getenv("OPENAI_API_KEY")
         ) if LANGCHAIN_AVAILABLE else None
     
+    @traceable(
+        run_type="retriever",
+        name="SupabaseMessageRetriever"
+    )
     def _get_relevant_documents(
         self,
         query: str,
@@ -59,16 +75,20 @@ class SupabaseMessageRetriever(BaseRetriever):
     ) -> List[Document]:
         """
         Retrieve relevant documents from Supabase message_embeddings table
-        This method is automatically traced by LangSmith
+        This method is automatically traced by LangSmith (via BaseRetriever and @traceable)
         """
         if not self.supabase or not self.embeddings:
+            print(f"[WARN] SupabaseMessageRetriever: Missing supabase client or embeddings")
             return []
         
         try:
+            print(f"[RAG] SupabaseMessageRetriever: Generating embedding for query: {query[:50]}...")
             # Generate query embedding
             query_embedding = self.embeddings.embed_query(query)
+            print(f"[RAG] SupabaseMessageRetriever: Embedding generated, length: {len(query_embedding)}")
             
             # Call Supabase RPC function
+            print(f"[RAG] SupabaseMessageRetriever: Calling Supabase RPC...")
             result = self.supabase.rpc(
                 'get_similar_user_messages',
                 {
@@ -83,6 +103,7 @@ class SupabaseMessageRetriever(BaseRetriever):
             # Convert to LangChain Documents
             documents = []
             if result.data:
+                print(f"[RAG] SupabaseMessageRetriever: Found {len(result.data)} results")
                 for item in result.data:
                     doc = Document(
                         page_content=item.get('content_snippet', ''),
@@ -97,11 +118,15 @@ class SupabaseMessageRetriever(BaseRetriever):
                         }
                     )
                     documents.append(doc)
+            else:
+                print(f"[RAG] SupabaseMessageRetriever: No results found")
             
             return documents
             
         except Exception as e:
             print(f"ERROR: SupabaseMessageRetriever failed: {e}")
+            import traceback
+            print(traceback.format_exc())
             return []
     
     async def _aget_relevant_documents(
@@ -141,6 +166,10 @@ class SupabaseDocumentRetriever(BaseRetriever):
             openai_api_key=os.getenv("OPENAI_API_KEY")
         ) if LANGCHAIN_AVAILABLE else None
     
+    @traceable(
+        run_type="retriever",
+        name="SupabaseDocumentRetriever"
+    )
     def _get_relevant_documents(
         self,
         query: str,
@@ -149,7 +178,7 @@ class SupabaseDocumentRetriever(BaseRetriever):
     ) -> List[Document]:
         """
         Retrieve relevant documents from Supabase document_embeddings table
-        This method is automatically traced by LangSmith
+        This method is automatically traced by LangSmith (via BaseRetriever and @traceable)
         """
         if not self.supabase or not self.embeddings:
             return []
@@ -229,6 +258,10 @@ class SupabaseGlobalKnowledgeRetriever(BaseRetriever):
             openai_api_key=os.getenv("OPENAI_API_KEY")
         ) if LANGCHAIN_AVAILABLE else None
     
+    @traceable(
+        run_type="retriever",
+        name="SupabaseGlobalKnowledgeRetriever"
+    )
     def _get_relevant_documents(
         self,
         query: str,
@@ -237,7 +270,7 @@ class SupabaseGlobalKnowledgeRetriever(BaseRetriever):
     ) -> List[Document]:
         """
         Retrieve relevant documents from Supabase global_knowledge table
-        This method is automatically traced by LangSmith
+        This method is automatically traced by LangSmith (via BaseRetriever and @traceable)
         """
         if not self.supabase or not self.embeddings:
             return []
