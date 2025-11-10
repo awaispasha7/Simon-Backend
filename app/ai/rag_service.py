@@ -378,27 +378,27 @@ class RAGService:
                 "content_length": len(content)
             }
         ):
-        try:
-            # Generate embedding
-            embedding = await self._get_embedding_service().generate_embedding(content)
-            
-            # Store embedding
-            embedding_id = await self.vector_storage.store_message_embedding(
-                message_id=message_id,
-                user_id=user_id,
-                project_id=project_id,
-                session_id=session_id,
-                embedding=embedding,
-                content=content,
-                role=role,
-                metadata=metadata
-            )
-            
-            return embedding_id is not None
-            
-        except Exception as e:
-            print(f"ERROR: Failed to embed and store message: {e}")
-            return False
+            try:
+                # Generate embedding
+                embedding = await self._get_embedding_service().generate_embedding(content)
+                
+                # Store embedding
+                embedding_id = await self.vector_storage.store_message_embedding(
+                    message_id=message_id,
+                    user_id=user_id,
+                    project_id=project_id,
+                    session_id=session_id,
+                    embedding=embedding,
+                    content=content,
+                    role=role,
+                    metadata=metadata
+                )
+                
+                return embedding_id is not None
+                
+            except Exception as e:
+                print(f"ERROR: Failed to embed and store message: {e}")
+                return False
     
     async def extract_and_store_knowledge(
         self,
@@ -426,44 +426,44 @@ class RAGService:
                 "conversation_length": len(conversation)
             }
         ):
-        try:
-            print(f"RAG: Extracting knowledge from conversation (user: {user_id})")
-            
-            # Analyze conversation for patterns
-            # This is a simplified version - you can make this more sophisticated
-            
-            # Example: Extract character development patterns
-            character_mentions = self._extract_character_patterns(conversation)
-            for char_pattern in character_mentions:
-                embedding = await self._get_embedding_service().generate_embedding(char_pattern['text'])
-                await self.vector_storage.store_global_knowledge(
-                    category='character',
-                    pattern_type='character_development',
-                    embedding=embedding,
-                    example_text=char_pattern['text'],
-                    description=char_pattern.get('description'),
-                    quality_score=0.7,
-                    tags=['conversation_extracted']
-                )
-            
-            # Example: Extract plot patterns
-            plot_patterns = self._extract_plot_patterns(conversation)
-            for plot_pattern in plot_patterns:
-                embedding = await self._get_embedding_service().generate_embedding(plot_pattern['text'])
-                await self.vector_storage.store_global_knowledge(
-                    category='plot',
-                    pattern_type='story_arc',
-                    embedding=embedding,
-                    example_text=plot_pattern['text'],
-                    description=plot_pattern.get('description'),
-                    quality_score=0.7,
-                    tags=['conversation_extracted']
-                )
-            
-            print(f"RAG: Extracted {len(character_mentions)} character patterns, {len(plot_patterns)} plot patterns")
-            
-        except Exception as e:
-            print(f"ERROR: Failed to extract and store knowledge: {e}")
+            try:
+                print(f"RAG: Extracting knowledge from conversation (user: {user_id})")
+                
+                # Analyze conversation for patterns
+                # This is a simplified version - you can make this more sophisticated
+                
+                # Example: Extract character development patterns
+                character_mentions = self._extract_character_patterns(conversation)
+                for char_pattern in character_mentions:
+                    embedding = await self._get_embedding_service().generate_embedding(char_pattern['text'])
+                    await self.vector_storage.store_global_knowledge(
+                        category='character',
+                        pattern_type='character_development',
+                        embedding=embedding,
+                        example_text=char_pattern['text'],
+                        description=char_pattern.get('description'),
+                        quality_score=0.7,
+                        tags=['conversation_extracted']
+                    )
+                
+                # Example: Extract plot patterns
+                plot_patterns = self._extract_plot_patterns(conversation)
+                for plot_pattern in plot_patterns:
+                    embedding = await self._get_embedding_service().generate_embedding(plot_pattern['text'])
+                    await self.vector_storage.store_global_knowledge(
+                        category='plot',
+                        pattern_type='story_arc',
+                        embedding=embedding,
+                        example_text=plot_pattern['text'],
+                        description=plot_pattern.get('description'),
+                        quality_score=0.7,
+                        tags=['conversation_extracted']
+                    )
+                
+                print(f"RAG: Extracted {len(character_mentions)} character patterns, {len(plot_patterns)} plot patterns")
+                
+            except Exception as e:
+                print(f"ERROR: Failed to extract and store knowledge: {e}")
     
     def _extract_character_patterns(self, conversation: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """Extract character-related patterns from conversation"""
