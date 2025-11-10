@@ -1,35 +1,61 @@
 """
 RAG (Retrieval Augmented Generation) Service
-Combines embedding generation, vector search, and context building for LLM prompts
+Uses LangChain retrievers for automatic LangSmith tracing
 """
 
+import os
 from typing import List, Dict, Any, Optional
 from uuid import UUID
-from .embedding_service import get_embedding_service
-from .vector_storage import vector_storage
-from .document_processor import document_processor
 
-# LangSmith integration
+# LangChain imports
 try:
-    from .langsmith_config import create_trace, trace_function
+    from langchain_openai import OpenAIEmbeddings
+    from .langchain_retrievers import (
+        SupabaseMessageRetriever,
+        SupabaseDocumentRetriever,
+        SupabaseGlobalKnowledgeRetriever
+    )
+    from langchain_core.documents import Document
+    LANGCHAIN_AVAILABLE = True
+except ImportError:
+    LANGCHAIN_AVAILABLE = False
+    OpenAIEmbeddings = None
+    SupabaseMessageRetriever = None
+    SupabaseDocumentRetriever = None
+    SupabaseGlobalKnowledgeRetriever = None
+    Document = None
+
+# Fallback to old implementation if LangChain not available
+if not LANGCHAIN_AVAILABLE:
+    from .embedding_service import get_embedding_service
+    from .vector_storage import vector_storage
+    from .document_processor import document_processor
+
+# LangSmith integration (for parent traces)
+try:
+    from .langsmith_config import create_trace
     LANGSMITH_AVAILABLE = True
 except ImportError:
     LANGSMITH_AVAILABLE = False
     def create_trace(*args, **kwargs):
         from contextlib import nullcontext
         return nullcontext()
-    def trace_function(*args, **kwargs):
-        def noop_decorator(func):
-            return func
-        return noop_decorator
 
 
 class RAGService:
     """Service for RAG-enhanced chat responses"""
     
     def __init__(self):
-        self.embedding_service = None  # Lazy initialization
-        self.vector_storage = vector_storage
+        if LANGCHAIN_AVAILABLE:
+            # Use LangChain embeddings (automatically traced)
+            self.embeddings = OpenAIEmbeddings(
+                model="text-embedding-3-small",
+                openai_api_key=os.getenv("OPENAI_API_KEY")
+            )
+        else:
+            # Fallback to old implementation
+            self.embedding_service = None
+            self.vector_storage = vector_storage
         
         # Configuration for retrieval
         self.user_context_weight = 0.4  # 40% weight on user-specific context
@@ -41,10 +67,12 @@ class RAGService:
         self.similarity_threshold = 0.1  # Very low threshold for testing
     
     def _get_embedding_service(self):
-        """Lazy initialization of embedding service"""
-        if self.embedding_service is None:
-            self.embedding_service = get_embedding_service()
-        return self.embedding_service
+        """Lazy initialization of embedding service (fallback only)"""
+        if not LANGCHAIN_AVAILABLE:
+            if self.embedding_service is None:
+                self.embedding_service = get_embedding_service()
+            return self.embedding_service
+        return None
     
     def _expand_brand_query(self, query: str) -> str:
         """
@@ -154,67 +182,119 @@ class RAGService:
                 else:
                     query_text = expanded_query
                 
-                query_embedding = await self._get_embedding_service().generate_query_embedding(query_text)
-                
-                # Step 2: Retrieve user-specific context
-                user_context = await self.vector_storage.get_similar_user_messages(
-                    query_embedding=query_embedding,
-                    user_id=user_id,
-                    project_id=project_id,
-                    match_count=self.user_match_count,
-                    similarity_threshold=self.similarity_threshold
-                )
-                
-                # Step 3: Retrieve global knowledge patterns
-                global_context = await self.vector_storage.get_similar_global_knowledge(
-                    query_embedding=query_embedding,
-                    match_count=self.global_match_count,
-                    similarity_threshold=self.similarity_threshold,
-                    min_quality_score=0.6
-                )
-                
-                # Step 4: Debug - Check if there are any document embeddings for this user (QUICK CHECK ONLY)
-                try:
-                    from app.database.supabase import get_supabase_client
-                    supabase = get_supabase_client()
-                    print(f"🔍 [RAG] Quick check: Querying for user_id: {str(user_id)}")
-                    debug_result = supabase.table('document_embeddings').select('embedding_id', count='exact').eq('user_id', str(user_id)).limit(1).execute()
-                    count = debug_result.count if hasattr(debug_result, 'count') else len(debug_result.data) if debug_result.data else 0
-                    print(f"🔍 [RAG] Quick check: Found {count} document embeddings for user {user_id}")
-                except Exception as e:
-                    print(f"🔍 [RAG] Quick check error: {e}")
-                
-                # Step 4: Retrieve document context
-                # For personal assistant: search across all projects to maximize context
-                # For multi-user: can limit by project_id if provided
-                print(f"🔍 [RAG] Calling get_document_context")
-                print(f"🔍 [RAG] user_id={user_id} (type: {type(user_id)}, str: {str(user_id)})")
-                print(f"🔍 [RAG] project_id={project_id} (type: {type(project_id)})")
-                print(f"🔍 [RAG] query_embedding length={len(query_embedding) if query_embedding else 'None'}")
-                
-                # Use very low threshold (0.1) to ensure we find documents
-                # Vector similarity scores can be lower than expected even for relevant content
-                document_context = []
-                try:
-                    print(f"🔍 [RAG] Starting document retrieval...")
-                    document_context = await document_processor.get_document_context(
+                # Step 2: Retrieve context using LangChain retrievers (automatically traced)
+                if LANGCHAIN_AVAILABLE:
+                    # Use LangChain retrievers - automatically traced by LangSmith
+                    message_retriever = SupabaseMessageRetriever(
+                        user_id=user_id,
+                        project_id=project_id,
+                        k=self.user_match_count,
+                        score_threshold=self.similarity_threshold
+                    )
+                    
+                    global_retriever = SupabaseGlobalKnowledgeRetriever(
+                        k=self.global_match_count,
+                        score_threshold=self.similarity_threshold,
+                        min_quality_score=0.6
+                    )
+                    
+                    document_retriever = SupabaseDocumentRetriever(
+                        user_id=user_id,
+                        project_id=project_id,
+                        k=self.document_match_count,
+                        score_threshold=self.similarity_threshold
+                    )
+                    
+                    # Retrieve documents (these calls are automatically traced)
+                    user_docs = message_retriever.get_relevant_documents(query_text)
+                    global_docs = global_retriever.get_relevant_documents(query_text)
+                    document_docs = document_retriever.get_relevant_documents(query_text)
+                    
+                    # Convert LangChain Documents to our format
+                    user_context = [
+                        {
+                            'content_snippet': doc.page_content,
+                            'message_id': doc.metadata.get('message_id'),
+                            'user_id': doc.metadata.get('user_id'),
+                            'project_id': doc.metadata.get('project_id'),
+                            'session_id': doc.metadata.get('session_id'),
+                            'role': doc.metadata.get('role'),
+                            'similarity': doc.metadata.get('similarity', 0.0),
+                            'metadata': {k: v for k, v in doc.metadata.items() if k not in ['message_id', 'user_id', 'project_id', 'session_id', 'role', 'similarity']}
+                        }
+                        for doc in user_docs
+                    ]
+                    
+                    global_context = [
+                        {
+                            'example_text': doc.page_content,
+                            'knowledge_id': doc.metadata.get('knowledge_id'),
+                            'category': doc.metadata.get('category'),
+                            'pattern_type': doc.metadata.get('pattern_type'),
+                            'description': doc.metadata.get('description'),
+                            'quality_score': doc.metadata.get('quality_score', 0.0),
+                            'similarity': doc.metadata.get('similarity', 0.0),
+                            'tags': doc.metadata.get('tags', []),
+                            'metadata': {k: v for k, v in doc.metadata.items() if k not in ['knowledge_id', 'category', 'pattern_type', 'description', 'quality_score', 'similarity', 'tags']}
+                        }
+                        for doc in global_docs
+                    ]
+                    
+                    document_context = [
+                        {
+                            'chunk_text': doc.page_content,
+                            'embedding_id': doc.metadata.get('embedding_id'),
+                            'asset_id': doc.metadata.get('asset_id'),
+                            'user_id': doc.metadata.get('user_id'),
+                            'project_id': doc.metadata.get('project_id'),
+                            'document_type': doc.metadata.get('document_type'),
+                            'chunk_index': doc.metadata.get('chunk_index'),
+                            'similarity': doc.metadata.get('similarity', 0.0),
+                            'metadata': {k: v for k, v in doc.metadata.items() if k not in ['embedding_id', 'asset_id', 'user_id', 'project_id', 'document_type', 'chunk_index', 'similarity']}
+                        }
+                        for doc in document_docs
+                    ]
+                else:
+                    # Fallback to old implementation
+                    query_embedding = await self._get_embedding_service().generate_query_embedding(query_text)
+                    
+                    # Step 2: Retrieve user-specific context
+                    user_context = await self.vector_storage.get_similar_user_messages(
                         query_embedding=query_embedding,
                         user_id=user_id,
-                        project_id=project_id,  # None = search all projects, specific ID = limit to that project
-                        match_count=10,  # Increase match count to get more results
-                        similarity_threshold=0.1  # Low threshold to ensure retrieval
+                        project_id=project_id,
+                        match_count=self.user_match_count,
+                        similarity_threshold=self.similarity_threshold
                     )
-                    print(f"✅ [RAG] Retrieved {len(document_context)} document chunks")
-                    if document_context:
-                        print(f"✅ [RAG] First chunk preview: {document_context[0].get('chunk_text', '')[:200]}")
-                        print(f"✅ [RAG] Document chunks will be included in AI context")
-                    else:
-                        print(f"⚠️ [RAG] No document chunks retrieved - check if documents match query or threshold is too high")
-                except Exception as doc_error:
-                    print(f"❌ [RAG] Error retrieving document context: {doc_error}")
-                    import traceback
-                    print(traceback.format_exc())
+                    
+                    # Step 3: Retrieve global knowledge patterns
+                    global_context = await self.vector_storage.get_similar_global_knowledge(
+                        query_embedding=query_embedding,
+                        match_count=self.global_match_count,
+                        similarity_threshold=self.similarity_threshold,
+                        min_quality_score=0.6
+                    )
+                
+                # Step 4: Document context already retrieved above if using LangChain
+                if not LANGCHAIN_AVAILABLE:
+                    # Fallback: Retrieve document context using old method
+                    print(f"🔍 [RAG] Calling get_document_context (fallback)")
                     document_context = []
+                    try:
+                        print(f"🔍 [RAG] Starting document retrieval...")
+                        document_context = await document_processor.get_document_context(
+                            query_embedding=query_embedding,
+                            user_id=user_id,
+                            project_id=project_id,
+                            match_count=10,
+                            similarity_threshold=0.1
+                        )
+                        print(f"✅ [RAG] Retrieved {len(document_context)} document chunks")
+                    except Exception as doc_error:
+                        print(f"❌ [RAG] Error retrieving document context: {doc_error}")
+                        import traceback
+                        print(traceback.format_exc())
+                        document_context = []
                 
                 # Step 5: Build combined context text for LLM prompt
                 combined_context_text = self._format_rag_context(user_context, global_context, document_context)
