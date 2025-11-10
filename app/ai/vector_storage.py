@@ -120,9 +120,9 @@ class VectorStorageService:
                 print("INFO: No similar user messages found")
                 return []
                 
-            except Exception as e:
-                print(f"ERROR: Failed to retrieve similar user messages: {e}")
-                return []
+        except Exception as e:
+            print(f"ERROR: Failed to retrieve similar user messages: {e}")
+            return []
     
     @traceable(run_type="retriever", name="VectorStoreRetriever_user_messages")
     async def get_similar_user_messages(
