@@ -45,14 +45,12 @@ def get_langsmith_client() -> Optional[Any]:
     
     if _langsmith_client is None:
         try:
-            # For org-scoped API keys, workspace_id is required
-            client_kwargs = {"api_key": LANGSMITH_API_KEY}
+            # For org-scoped API keys, workspace_id must be set as environment variable
+            # The Client reads from environment variables, not constructor parameters
             if LANGSMITH_WORKSPACE_ID:
-                client_kwargs["default_workspace_id"] = LANGSMITH_WORKSPACE_ID
-                # Also set as environment variable for wrap_openai
                 os.environ["LANGSMITH_WORKSPACE_ID"] = LANGSMITH_WORKSPACE_ID
             
-            _langsmith_client = Client(**client_kwargs)
+            _langsmith_client = Client(api_key=LANGSMITH_API_KEY)
             print("[OK] LangSmith client initialized")
             if LANGSMITH_WORKSPACE_ID:
                 print(f"[OK] Using workspace: {LANGSMITH_WORKSPACE_ID}")
@@ -146,6 +144,11 @@ def create_trace(
             from contextlib import nullcontext
             return nullcontext()
         
+        # Ensure workspace_id is set as environment variable (required for org-scoped API keys)
+        # tracing_context reads from environment variables, not parameters
+        if LANGSMITH_WORKSPACE_ID:
+            os.environ["LANGSMITH_WORKSPACE_ID"] = LANGSMITH_WORKSPACE_ID
+        
         # Build kwargs for tracing_context
         trace_kwargs = {
             "project_name": LANGSMITH_PROJECT,
@@ -154,10 +157,6 @@ def create_trace(
             "tags": tags or [],
             "metadata": metadata or {}
         }
-        
-        # Add workspace_id if provided (required for org-scoped API keys)
-        if LANGSMITH_WORKSPACE_ID:
-            trace_kwargs["workspace_id"] = LANGSMITH_WORKSPACE_ID
         
         return tracing_context(**trace_kwargs)
     except Exception as e:
@@ -189,6 +188,11 @@ def trace_function(
         return noop_decorator
     
     try:
+        # Ensure workspace_id is set as environment variable (required for org-scoped API keys)
+        # traceable reads from environment variables, not parameters
+        if LANGSMITH_WORKSPACE_ID:
+            os.environ["LANGSMITH_WORKSPACE_ID"] = LANGSMITH_WORKSPACE_ID
+        
         # Build kwargs for traceable
         traceable_kwargs = {
             "name": name,
@@ -196,10 +200,6 @@ def trace_function(
             "run_type": run_type,
             "tags": tags or []
         }
-        
-        # Add workspace_id if provided (required for org-scoped API keys)
-        if LANGSMITH_WORKSPACE_ID:
-            traceable_kwargs["workspace_id"] = LANGSMITH_WORKSPACE_ID
         
         return traceable(**traceable_kwargs)
     except Exception as e:
