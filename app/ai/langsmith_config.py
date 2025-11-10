@@ -75,12 +75,25 @@ def wrap_openai_client(client: Any) -> Any:
         if wrap_openai is None:
             return client
         
-        wrapped = wrap_openai(
-            client,
-            project_name=LANGSMITH_PROJECT,
-        )
-        print("[OK] OpenAI client wrapped with LangSmith tracing")
-        return wrapped
+        # Set project name via environment variable for wrap_openai
+        # wrap_openai reads from LANGSMITH_PROJECT env var automatically
+        import os
+        original_project = os.getenv("LANGSMITH_PROJECT")
+        os.environ["LANGSMITH_PROJECT"] = LANGSMITH_PROJECT
+        
+        try:
+            # wrap_openai doesn't take project_name parameter directly
+            # It reads from LANGSMITH_PROJECT environment variable
+            wrapped = wrap_openai(client)
+            print("[OK] OpenAI client wrapped with LangSmith tracing")
+            return wrapped
+        finally:
+            # Restore original project if it was set
+            if original_project:
+                os.environ["LANGSMITH_PROJECT"] = original_project
+            elif "LANGSMITH_PROJECT" in os.environ:
+                del os.environ["LANGSMITH_PROJECT"]
+                
     except Exception as e:
         print(f"[WARN] Failed to wrap OpenAI client with LangSmith: {e}")
         return client
