@@ -4,16 +4,21 @@
   "outputDirectory": null,
   "installCommand": null,
   "framework": null,
-  "functions": {
-    "api/index.py": {
-      "runtime": "@vercel/python",
-      "maxDuration": 60
+  "builds": [
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python"
     }
-  },
+  ],
   "routes": [
     {
       "src": "/(.*)",
       "dest": "api/index.py"
     }
-  ]
+  ],
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 60
+    }
+  }
 }
