@@ -579,7 +579,8 @@ async def chat(
                                 project_id=project_id,
                                 rag_context=rag_context,
                                 image_data=image_data_list,
-                                max_tokens=2000  # Restored to reasonable value for proper responses
+                                max_tokens=2000,  # Restored to reasonable value for proper responses
+                                enable_web_search=chat_request.enable_web_search
                             )
                         )
                         

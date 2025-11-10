@@ -45,13 +45,36 @@ class WebSearchService:
         """Check if web search is enabled"""
         return self.enabled and self.client is not None
     
-    def search(self, query: str, max_results: int = 5) -> Dict[str, Any]:
+    def _enhance_query_for_recency(self, query: str) -> str:
+        """Enhance search query to prioritize recent results"""
+        query_lower = query.lower()
+        
+        # Check if query already has recency indicators
+        recency_keywords = [
+            "latest", "recent", "current", "new", "2024", "2025", 
+            "today", "this week", "this month", "now"
+        ]
+        
+        has_recency = any(keyword in query_lower for keyword in recency_keywords)
+        
+        # If no recency indicator, add current year to prioritize recent content
+        if not has_recency:
+            from datetime import datetime
+            current_year = datetime.now().year
+            # Only add year if it makes sense (not for general queries)
+            if len(query.split()) < 5:  # Short queries benefit from year
+                return f"{query} {current_year}"
+        
+        return query
+    
+    def search(self, query: str, max_results: int = 5, prioritize_recent: bool = True) -> Dict[str, Any]:
         """
         Perform a web search
         
         Args:
             query: Search query string
             max_results: Maximum number of results to return (default: 5)
+            prioritize_recent: Whether to enhance query for recent results (default: True)
             
         Returns:
             Dictionary with search results containing:
@@ -68,9 +91,14 @@ class WebSearchService:
             }
         
         try:
+            # Enhance query for recency if requested
+            enhanced_query = self._enhance_query_for_recency(query) if prioritize_recent else query
+            if enhanced_query != query:
+                print(f"[WebSearch] Enhanced query for recency: '{query}' -> '{enhanced_query}'")
+            
             # Perform search with Tavily
             response = self.client.search(
-                query=query,
+                query=enhanced_query,
                 max_results=max_results,
                 search_depth="advanced"  # Use advanced search for better results
             )
@@ -83,13 +111,19 @@ class WebSearchService:
                         "title": result.get("title", ""),
                         "url": result.get("url", ""),
                         "content": result.get("content", ""),
-                        "score": result.get("score", 0.0)
+                        "score": result.get("score", 0.0),
+                        "published_date": result.get("published_date"),  # If available from Tavily
                     })
+            
+            # Sort by score (higher = more relevant) - Tavily already ranks by relevance + recency
+            # Results with higher scores are typically more recent and relevant
+            results.sort(key=lambda x: x.get("score", 0.0), reverse=True)
             
             return {
                 "success": True,
                 "results": results,
                 "query": query,
+                "enhanced_query": enhanced_query if enhanced_query != query else None,
                 "total_results": len(results)
             }
             

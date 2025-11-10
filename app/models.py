@@ -71,6 +71,7 @@ class ChatRequest(BaseModel):
     project_id: Optional[UUID] = None  # If provided, create new session
     attached_files: Optional[List[Dict[str, Any]]] = None  # Attached files with metadata
     edit_from_message_id: Optional[UUID] = None  # If provided, delete this message and all subsequent messages before creating new message
+    enable_web_search: Optional[bool] = None  # If True, enable web search; if False, disable; if None, use default behavior
 
 class ChatResponse(BaseModel):
     reply: str

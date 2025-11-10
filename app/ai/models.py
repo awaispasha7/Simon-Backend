@@ -115,7 +115,7 @@ class AIModelManager:
             "type": "function",
             "function": {
                 "name": "internet_search",
-                "description": "Search the internet for current information, facts, news, or data that may not be in the training data. ALWAYS use this when: 1) User explicitly asks to search (e.g., 'search for', 'look up', 'find information about'), 2) User asks about current events, recent news, or latest information, 3) User asks about statistics, data, or facts that may have changed, 4) User asks 'what's the latest' or 'current' information, 5) User asks about recent research or studies. Use this tool proactively when you need up-to-date information.",
+                "description": "Search the internet for current information, facts, news, or data that may not be in the training data. ALWAYS use this when: 1) User explicitly asks to search (e.g., 'search for', 'look up', 'find information about'), 2) User asks about current events, recent news, or latest information, 3) User asks about statistics, data, or facts that may have changed, 4) User asks 'what's the latest' or 'current' information, 5) User asks about recent research or studies. IMPORTANT: When constructing the search query, ALWAYS include recency terms like 'latest', 'recent', '2024', '2025', or 'current' when the user asks about recent information. For example, if user asks 'what are fitness trends?', search for 'latest fitness trends 2024' or 'recent fitness trends'. This ensures you get the most current information.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -208,6 +208,7 @@ class AIModelManager:
             task_type: The type of task (determines which model to use)
             prompt: The input prompt
             **kwargs: Additional parameters for the specific model
+                - enable_web_search: Optional[bool] - If False, disable web search; if True/None, use default behavior
             
         Returns:
             Dict containing the response and metadata
@@ -501,22 +502,30 @@ If document context is provided above, you MUST use it. This is not optional.
             
             print(f"🤖 [AI] Selected model: {model_name} ({'vision-capable' if image_data_list else 'text-only'})")
 
-            # Get web search function if available
-            web_search_function = self._get_web_search_function()
-            tools = [web_search_function] if web_search_function else None
-            
-            # Set tool_choice based on whether search should be forced
-            if tools:
-                if force_search:
-                    # Force search by requiring the function to be called
-                    tool_choice = {"type": "function", "function": {"name": "internet_search"}}
-                    print(f"🔍 [WebSearch] Forcing web search due to explicit trigger")
-                else:
-                    # Let AI decide when to search
-                    tool_choice = "auto"
-                    print(f"🔍 [WebSearch] Web search tool enabled - AI can search the internet when needed")
-            else:
+            # Check if web search is explicitly disabled
+            enable_web_search = kwargs.get("enable_web_search")
+            if enable_web_search is False:
+                # User explicitly disabled web search
+                tools = None
                 tool_choice = None
+                print(f"🔍 [WebSearch] Web search disabled by user (globe icon off)")
+            else:
+                # Get web search function if available (enable_web_search is True or None)
+                web_search_function = self._get_web_search_function()
+                tools = [web_search_function] if web_search_function else None
+                
+                # Set tool_choice based on whether search should be forced
+                if tools:
+                    if force_search:
+                        # Force search by requiring the function to be called
+                        tool_choice = {"type": "function", "function": {"name": "internet_search"}}
+                        print(f"🔍 [WebSearch] Forcing web search due to explicit trigger")
+                    else:
+                        # Let AI decide when to search
+                        tool_choice = "auto"
+                        print(f"🔍 [WebSearch] Web search tool enabled - AI can search the internet when needed")
+                else:
+                    tool_choice = None
 
             # Prepare metadata for LangSmith tracing
             rag_context = kwargs.get("rag_context", {})
@@ -529,6 +538,7 @@ If document context is provided above, you MUST use it. This is not optional.
                 "message_count": len(messages),
                 "has_rag_context": bool(rag_context),
                 "has_web_search": bool(tools),
+                "enable_web_search_flag": enable_web_search,
                 "rag_user_context_count": rag_metadata.get("user_context_count", 0) if isinstance(rag_metadata, dict) else 0,
                 "rag_document_context_count": rag_metadata.get("document_context_count", 0) if isinstance(rag_metadata, dict) else 0,
                 "rag_global_context_count": rag_metadata.get("global_context_count", 0) if isinstance(rag_metadata, dict) else 0,
