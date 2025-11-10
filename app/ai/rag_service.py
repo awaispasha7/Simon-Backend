@@ -59,15 +59,19 @@ class RAGService:
             print(f"RAG: Building context for user {user_id}")
             
             # Step 1: Generate query embedding (include conversation context if available)
+            # CRITICAL: Expand generic queries about "me" or "my" to include brand-related keywords
+            # This helps match against brand documents (niche, ICP, tone, etc.) instead of irrelevant docs
+            expanded_query = self._expand_brand_query(user_message)
+            
             if conversation_history:
                 # Combine recent conversation for better context
                 recent_context = "\n".join([
                     f"{msg.get('role', 'user')}: {msg.get('content', '')}"
                     for msg in conversation_history[-3:]
                 ])
-                query_text = f"{recent_context}\nUser: {user_message}"
+                query_text = f"{recent_context}\nUser: {expanded_query}"
             else:
-                query_text = user_message
+                query_text = expanded_query
             
             query_embedding = await self._get_embedding_service().generate_query_embedding(query_text)
             
