@@ -5,7 +5,11 @@ Handles text extraction and embedding generation for uploaded documents
 
 import os
 import asyncio
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from langsmith import RunTree
+
 from uuid import UUID, uuid4
 # Optional PyPDF2 import for serverless (large dependency)
 try:
@@ -29,9 +33,9 @@ from .vector_storage import vector_storage
 from ..database.supabase import get_supabase_client
 
 # LangSmith integration
-# Use @traceable decorator - it works with async functions when properly configured
+# Use tracing_context for async functions (more reliable than @traceable)
 try:
-    from langsmith import traceable
+    from langsmith.run_helpers import tracing_context
     from .langsmith_config import create_trace
     import os
     from dotenv import load_dotenv
@@ -41,7 +45,7 @@ try:
     LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT", "simon-chatbot")
     LANGSMITH_WORKSPACE_ID = os.getenv("LANGSMITH_WORKSPACE_ID")
     
-    # Ensure environment variables are set for traceable
+    # Ensure environment variables are set
     if LANGSMITH_PROJECT:
         os.environ["LANGSMITH_PROJECT"] = LANGSMITH_PROJECT
     if LANGSMITH_WORKSPACE_ID:
@@ -51,10 +55,8 @@ try:
     LANGSMITH_AVAILABLE = True
 except ImportError:
     LANGSMITH_AVAILABLE = False
-    def traceable(*args, **kwargs):
-        def decorator(func):
-            return func
-        return decorator
+    tracing_context = None
+    from contextlib import nullcontext as tracing_context
     def create_trace(*args, **kwargs):
         from contextlib import nullcontext
         return nullcontext()
@@ -457,18 +459,14 @@ class DocumentProcessor:
             print(f"❌ Error retrieving document context: {e}")
             return []
     
-    @traceable(
-        run_type="retriever",
-        name="VectorStoreRetriever_documents",
-        project_name=LANGSMITH_PROJECT if LANGSMITH_AVAILABLE else None
-    )
     async def get_document_context(
         self,
         query_embedding: List[float],
         user_id: UUID,
         project_id: Optional[UUID] = None,
         match_count: int = 5,
-        similarity_threshold: float = 0.7
+        similarity_threshold: float = 0.7,
+        parent_run_tree: Optional["RunTree"] = None
     ) -> List[Dict[str, Any]]:
         """
         Retrieve relevant document chunks for RAG context
@@ -479,17 +477,46 @@ class DocumentProcessor:
             project_id: Optional project ID to filter by
             match_count: Maximum number of chunks to retrieve
             similarity_threshold: Minimum similarity score
+            parent_run_tree: Optional parent run tree for explicit context propagation
             
         Returns:
             List of relevant document chunks
         """
-        return await self._get_document_context_impl(
-            query_embedding=query_embedding,
-            user_id=user_id,
-            project_id=project_id,
-            match_count=match_count,
-            similarity_threshold=similarity_threshold
-        )
+        # Use tracing_context with explicit parent for async functions
+        if LANGSMITH_AVAILABLE and tracing_context:
+            trace_kwargs = {
+                "project_name": LANGSMITH_PROJECT,
+                "name": "VectorStoreRetriever_documents",
+                "run_type": "retriever",
+                "tags": ["rag", "vector_search", "retrieval", "documents"],
+                "metadata": {
+                    "user_id": str(user_id),
+                    "project_id": str(project_id) if project_id else None,
+                    "match_count": match_count,
+                    "similarity_threshold": similarity_threshold,
+                    "embedding_dimension": len(query_embedding) if query_embedding else 0
+                }
+            }
+            # Pass parent run tree explicitly if provided
+            if parent_run_tree is not None:
+                trace_kwargs["parent"] = parent_run_tree
+            
+            with tracing_context(**trace_kwargs):
+                return await self._get_document_context_impl(
+                    query_embedding=query_embedding,
+                    user_id=user_id,
+                    project_id=project_id,
+                    match_count=match_count,
+                    similarity_threshold=similarity_threshold
+                )
+        else:
+            return await self._get_document_context_impl(
+                query_embedding=query_embedding,
+                user_id=user_id,
+                project_id=project_id,
+                match_count=match_count,
+                similarity_threshold=similarity_threshold
+            )
 
 
 # Global singleton instance

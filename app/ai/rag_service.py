@@ -123,6 +123,13 @@ class RAGService:
             - metadata: Metadata about retrieval
         """
         # LangSmith tracing for RAG operations
+        # Get parent run tree for explicit context propagation
+        try:
+            from langsmith import get_current_run_tree
+            parent_run_tree = get_current_run_tree()
+        except (ImportError, Exception):
+            parent_run_tree = None
+        
         with create_trace(
             name="get_rag_context",
             run_type="chain",
@@ -135,6 +142,13 @@ class RAGService:
                 "conversation_history_length": len(conversation_history) if conversation_history else 0
             }
         ):
+            # Get current run tree for this trace to pass to child functions
+            try:
+                from langsmith import get_current_run_tree
+                rag_run_tree = get_current_run_tree()
+            except (ImportError, Exception):
+                rag_run_tree = None
+            
             try:
                 print(f"RAG: Building context for user {user_id}")
                 
@@ -156,24 +170,26 @@ class RAGService:
                 # Step 2: Generate query embedding
                 query_embedding = await self._get_embedding_service().generate_query_embedding(query_text)
                 
-                # Step 3: Retrieve user-specific context (traced via @traceable in vector_storage)
+                # Step 3: Retrieve user-specific context (with explicit parent run tree)
                 user_context = await self.vector_storage.get_similar_user_messages(
                     query_embedding=query_embedding,
                     user_id=user_id,
                     project_id=project_id,
                     match_count=self.user_match_count,
-                    similarity_threshold=self.similarity_threshold
+                    similarity_threshold=self.similarity_threshold,
+                    parent_run_tree=rag_run_tree
                 )
                 
-                # Step 4: Retrieve global knowledge patterns (traced via @traceable in vector_storage)
+                # Step 4: Retrieve global knowledge patterns (with explicit parent run tree)
                 global_context = await self.vector_storage.get_similar_global_knowledge(
                     query_embedding=query_embedding,
                     match_count=self.global_match_count,
                     similarity_threshold=self.similarity_threshold,
-                    min_quality_score=0.6
+                    min_quality_score=0.6,
+                    parent_run_tree=rag_run_tree
                 )
                 
-                # Step 5: Retrieve document context (traced via @traceable in document_processor)
+                # Step 5: Retrieve document context (with explicit parent run tree)
                 print(f"🔍 [RAG] Calling get_document_context")
                 document_context = []
                 try:
@@ -183,7 +199,8 @@ class RAGService:
                         user_id=user_id,
                         project_id=project_id,
                         match_count=10,
-                        similarity_threshold=0.1
+                        similarity_threshold=0.1,
+                        parent_run_tree=rag_run_tree
                     )
                     print(f"✅ [RAG] Retrieved {len(document_context)} document chunks")
                 except Exception as doc_error:
@@ -192,10 +209,10 @@ class RAGService:
                     print(traceback.format_exc())
                     document_context = []
                 
-                # Step 5: Build combined context text for LLM prompt
+                # Step 6: Build combined context text for LLM prompt
                 combined_context_text = self._format_rag_context(user_context, global_context, document_context)
                 
-                # Step 6: Build metadata
+                # Step 7: Build metadata
                 metadata = {
                     "user_context_count": len(user_context),
                     "global_context_count": len(global_context),
@@ -221,9 +238,10 @@ class RAGService:
                     "combined_context_text": combined_context_text,
                     "metadata": metadata
                 }
-                
             except Exception as e:
                 print(f"ERROR: Failed to get RAG context: {e}")
+                import traceback
+                print(traceback.format_exc())
                 return {
                     "user_context": [],
                     "global_context": [],
@@ -360,27 +378,27 @@ class RAGService:
                 "content_length": len(content)
             }
         ):
-            try:
-                # Generate embedding
-                embedding = await self._get_embedding_service().generate_embedding(content)
-                
-                # Store embedding
-                embedding_id = await self.vector_storage.store_message_embedding(
-                    message_id=message_id,
-                    user_id=user_id,
-                    project_id=project_id,
-                    session_id=session_id,
-                    embedding=embedding,
-                    content=content,
-                    role=role,
-                    metadata=metadata
-                )
-                
-                return embedding_id is not None
-                
-            except Exception as e:
-                print(f"ERROR: Failed to embed and store message: {e}")
-                return False
+        try:
+            # Generate embedding
+            embedding = await self._get_embedding_service().generate_embedding(content)
+            
+            # Store embedding
+            embedding_id = await self.vector_storage.store_message_embedding(
+                message_id=message_id,
+                user_id=user_id,
+                project_id=project_id,
+                session_id=session_id,
+                embedding=embedding,
+                content=content,
+                role=role,
+                metadata=metadata
+            )
+            
+            return embedding_id is not None
+            
+        except Exception as e:
+            print(f"ERROR: Failed to embed and store message: {e}")
+            return False
     
     async def extract_and_store_knowledge(
         self,
@@ -408,44 +426,44 @@ class RAGService:
                 "conversation_length": len(conversation)
             }
         ):
-            try:
-                print(f"RAG: Extracting knowledge from conversation (user: {user_id})")
-                
-                # Analyze conversation for patterns
-                # This is a simplified version - you can make this more sophisticated
-                
-                # Example: Extract character development patterns
-                character_mentions = self._extract_character_patterns(conversation)
-                for char_pattern in character_mentions:
-                    embedding = await self._get_embedding_service().generate_embedding(char_pattern['text'])
-                    await self.vector_storage.store_global_knowledge(
-                        category='character',
-                        pattern_type='character_development',
-                        embedding=embedding,
-                        example_text=char_pattern['text'],
-                        description=char_pattern.get('description'),
-                        quality_score=0.7,
-                        tags=['conversation_extracted']
-                    )
-                
-                # Example: Extract plot patterns
-                plot_patterns = self._extract_plot_patterns(conversation)
-                for plot_pattern in plot_patterns:
-                    embedding = await self._get_embedding_service().generate_embedding(plot_pattern['text'])
-                    await self.vector_storage.store_global_knowledge(
-                        category='plot',
-                        pattern_type='story_arc',
-                        embedding=embedding,
-                        example_text=plot_pattern['text'],
-                        description=plot_pattern.get('description'),
-                        quality_score=0.7,
-                        tags=['conversation_extracted']
-                    )
-                
-                print(f"RAG: Extracted {len(character_mentions)} character patterns, {len(plot_patterns)} plot patterns")
-                
-            except Exception as e:
-                print(f"ERROR: Failed to extract and store knowledge: {e}")
+        try:
+            print(f"RAG: Extracting knowledge from conversation (user: {user_id})")
+            
+            # Analyze conversation for patterns
+            # This is a simplified version - you can make this more sophisticated
+            
+            # Example: Extract character development patterns
+            character_mentions = self._extract_character_patterns(conversation)
+            for char_pattern in character_mentions:
+                embedding = await self._get_embedding_service().generate_embedding(char_pattern['text'])
+                await self.vector_storage.store_global_knowledge(
+                    category='character',
+                    pattern_type='character_development',
+                    embedding=embedding,
+                    example_text=char_pattern['text'],
+                    description=char_pattern.get('description'),
+                    quality_score=0.7,
+                    tags=['conversation_extracted']
+                )
+            
+            # Example: Extract plot patterns
+            plot_patterns = self._extract_plot_patterns(conversation)
+            for plot_pattern in plot_patterns:
+                embedding = await self._get_embedding_service().generate_embedding(plot_pattern['text'])
+                await self.vector_storage.store_global_knowledge(
+                    category='plot',
+                    pattern_type='story_arc',
+                    embedding=embedding,
+                    example_text=plot_pattern['text'],
+                    description=plot_pattern.get('description'),
+                    quality_score=0.7,
+                    tags=['conversation_extracted']
+                )
+            
+            print(f"RAG: Extracted {len(character_mentions)} character patterns, {len(plot_patterns)} plot patterns")
+            
+        except Exception as e:
+            print(f"ERROR: Failed to extract and store knowledge: {e}")
     
     def _extract_character_patterns(self, conversation: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """Extract character-related patterns from conversation"""
