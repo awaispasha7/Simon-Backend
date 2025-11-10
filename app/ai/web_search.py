@@ -49,9 +49,14 @@ class WebSearchService:
         """Enhance search query to prioritize recent results"""
         query_lower = query.lower()
         
-        # Check if query already has recency indicators
+        # Get current year dynamically
+        from datetime import datetime
+        current_year = datetime.now().year
+        
+        # Check if query already has recency indicators (including current year)
         recency_keywords = [
-            "latest", "recent", "current", "new", "2024", "2025", 
+            "latest", "recent", "current", "new", 
+            str(current_year - 1), str(current_year), str(current_year + 1),  # Include current year and adjacent years
             "today", "this week", "this month", "now"
         ]
         
@@ -59,8 +64,6 @@ class WebSearchService:
         
         # If no recency indicator, add current year to prioritize recent content
         if not has_recency:
-            from datetime import datetime
-            current_year = datetime.now().year
             # Only add year if it makes sense (not for general queries)
             if len(query.split()) < 5:  # Short queries benefit from year
                 return f"{query} {current_year}"
