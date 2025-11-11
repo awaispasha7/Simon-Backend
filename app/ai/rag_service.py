@@ -59,45 +59,70 @@ class RAGService:
         query_lower = query.lower()
         
         # Map queries to specific document types
-        # Avatar Sheet / ICP queries
+        # Avatar Sheet / ICP queries - EXPANDED
         if any(phrase in query_lower for phrase in [
             "who are my", "who is my", "my niche", "my audience", "my target", "potential clients",
-            "ideal customer", "target audience", "who do i", "who should i"
+            "ideal customer", "target audience", "who do i", "who should i", "who are", "client",
+            "customer", "people i", "people who", "demographics", "psychographics"
         ]):
-            return f"{query} avatar sheet ICP ideal customer profile target audience potential clients niche demographics psychographics"
+            return f"{query} avatar sheet ICP ideal customer profile target audience potential clients niche demographics psychographics client profile audience behavior emotional patterns"
         
-        # Script/Storytelling queries
+        # Script/Storytelling queries - EXPANDED
         if any(phrase in query_lower for phrase in [
-            "script", "hook", "cta", "story", "video", "content", "create", "write", "generate"
+            "script", "hook", "cta", "story", "video", "content", "create", "write", "generate",
+            "reel", "tiktok", "short", "caption", "post", "social media", "storytelling"
         ]):
-            return f"{query} script structure hook formulas CTA call to action storytelling rules content creation"
+            return f"{query} script structure hook formulas CTA call to action storytelling rules content creation video script short form content retention blueprint"
         
         # Tone/Style queries - Make more specific to match brand documents
         if any(phrase in query_lower for phrase in [
-            "tone", "voice", "style", "how do i write", "writing style", "how should i", "my tone", "my voice", "my style"
+            "tone", "voice", "style", "how do i write", "writing style", "how should i", "my tone", "my voice", "my style",
+            "how to write", "writing", "messaging", "language", "brand voice"
         ]):
             return f"{query} Simon brand tone voice writing style brand identity north star brand vision Fit For Life Coaching brand philosophy messaging rules calm authority grounded intelligent emotionally honest"
         
-        # Content strategy queries
+        # Content strategy queries - EXPANDED
         if any(phrase in query_lower for phrase in [
-            "content strategy", "weekly", "ideas", "plan", "calendar", "content plan"
+            "content strategy", "weekly", "ideas", "plan", "calendar", "content plan", "content ideas",
+            "what to post", "posting", "schedule", "content calendar", "content pillars"
         ]):
-            return f"{query} content strategy content pillars weekly planning content ideas"
+            return f"{query} content strategy content pillars weekly planning content ideas posting schedule content calendar purple cow content blueprint"
         
-        # Carousel queries
+        # Carousel queries - EXPANDED
         if any(phrase in query_lower for phrase in [
-            "carousel", "slides", "post", "instagram post"
+            "carousel", "slides", "post", "instagram post", "carousel post", "slide deck"
         ]):
-            return f"{query} carousel rules carousel structure slides headline"
+            return f"{query} carousel rules carousel structure slides headline carousel creation rules"
         
-        # General personal/brand queries
+        # Competitor analysis queries
+        if any(phrase in query_lower for phrase in [
+            "competitor", "competition", "analyze", "rewrite", "rewrite in my", "in my voice", "in my tone"
+        ]):
+            return f"{query} competitor analysis rewrite brand voice tone storytelling style Simon Fit For Life Coaching"
+        
+        # Brand/Identity queries - EXPANDED
+        if any(phrase in query_lower for phrase in [
+            "brand", "identity", "positioning", "philosophy", "mission", "values", "what we stand for"
+        ]):
+            return f"{query} brand identity north star brand vision Fit For Life Coaching brand philosophy mission values positioning"
+        
+        # Personal description queries
+        if any(phrase in query_lower for phrase in [
+            "tell me about yourself", "about you", "your story", "your background", "who are you",
+            "your journey", "your experience"
+        ]):
+            return f"{query} Simon personal description background story journey experience childhood struggles transformation"
+        
+        # General personal/brand queries - EXPANDED
         if any(phrase in query_lower for phrase in [
             "what do you know about me", "who am i", "what's my", "what is my",
-            "tell me about me", "my brand"
+            "tell me about me", "my brand", "what are my", "how do i", "how should i"
         ]):
-            return f"{query} niche target audience ICP ideal customer profile brand identity tone voice writing style content pillars storytelling rules hook formulas CTA call to action"
+            return f"{query} niche target audience ICP ideal customer profile brand identity tone voice writing style content pillars storytelling rules hook formulas CTA call to action brand documents"
         
-        return query
+        # If no specific match, still add brand keywords for better document matching
+        # This ensures even generic queries can find relevant brand documents
+        return f"{query} Fit For Life Coaching brand documents content strategy"
     
     async def get_rag_context(
         self,
