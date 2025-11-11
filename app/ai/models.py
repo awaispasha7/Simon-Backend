@@ -353,9 +353,11 @@ If document context is provided above, you MUST use it. This is not optional.
         - The document context below contains Simon's brand documents (Avatar Sheet, Script guides, Content strategy, etc.)
         - When asked "Who is my niche?" or "Who are my potential clients?" → Answer DIRECTLY from the Avatar Sheet / ICP document
         - When asked to create scripts → Use the Script/Storytelling documents for structure, hook formulas, CTA formats
-        - When asked about tone, voice, style → Reference the North Star / Brand Vision documents
+        - When asked about tone, voice, style → Reference the North Star / Brand Vision documents AND provide DETAILED, SPECIFIC answers
         - When creating content → Apply ALL rules, formulas, and guidelines from the documents
         - NEVER say "I don't have access to your documents" - the context below IS from Simon's documents
+        - If asked about tone/style/voice → Provide COMPREHENSIVE answers with specific examples, not generic descriptions
+        - ALWAYS quote or reference specific details from the document context when answering
         - If information isn't in the context, say "Based on your documents, I don't see specific information about [topic], but here's what I know from your brand guidelines..."
 
         STRUCTURED OUTPUTS REQUIRED:

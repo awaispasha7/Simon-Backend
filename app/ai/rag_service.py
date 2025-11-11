@@ -72,11 +72,11 @@ class RAGService:
         ]):
             return f"{query} script structure hook formulas CTA call to action storytelling rules content creation"
         
-        # Tone/Style queries
+        # Tone/Style queries - Make more specific to match brand documents
         if any(phrase in query_lower for phrase in [
-            "tone", "voice", "style", "how do i write", "writing style", "how should i"
+            "tone", "voice", "style", "how do i write", "writing style", "how should i", "my tone", "my voice", "my style"
         ]):
-            return f"{query} tone voice writing style brand identity north star brand vision"
+            return f"{query} Simon brand tone voice writing style brand identity north star brand vision Fit For Life Coaching brand philosophy messaging rules calm authority grounded intelligent emotionally honest"
         
         # Content strategy queries
         if any(phrase in query_lower for phrase in [
@@ -194,11 +194,12 @@ class RAGService:
                 document_context = []
                 try:
                     print(f"🔍 [RAG] Starting document retrieval...")
+                    # Increase match_count for better coverage, especially for brand questions
                     document_context = await document_processor.get_document_context(
                         query_embedding=query_embedding,
                         user_id=user_id,
                         project_id=project_id,
-                        match_count=10,
+                        match_count=15,  # Increased from 10 to get more relevant chunks
                         similarity_threshold=0.1,
                         parent_run_tree=rag_run_tree
                     )
