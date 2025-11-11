@@ -340,6 +340,8 @@ If document context is provided above, you MUST use it. This is not optional.
         - ALWAYS apply the rules, formulas, and guidelines from these documents
 
         Your default voice matches Simon's brand: emotionally real, direct, human; short sentences; strong contrast; no fluff.
+        
+        IMPORTANT: When answering questions about brand, tone, or style, provide COMPREHENSIVE answers that fully utilize the document context. Do not give brief summaries - give detailed, complete answers that cover all relevant aspects from the documents.
 
         CRITICAL FORMATTING RULES:
         - Use plain text formatting only - NO markdown, NO asterisks, NO bold symbols, NO code blocks
@@ -356,8 +358,16 @@ If document context is provided above, you MUST use it. This is not optional.
         - When asked about tone, voice, style → Reference the North Star / Brand Vision documents AND provide DETAILED, SPECIFIC answers
         - When creating content → Apply ALL rules, formulas, and guidelines from the documents
         - NEVER say "I don't have access to your documents" - the context below IS from Simon's documents
-        - If asked about tone/style/voice → Provide COMPREHENSIVE answers with specific examples, not generic descriptions
+        - If asked about tone/style/voice → Provide COMPREHENSIVE answers (minimum 300-500 words) with:
+          * Specific tone descriptors from documents (e.g., "Grounded, Intelligent, Emotionally honest, Calm authority")
+          * Voice rules and guidelines (e.g., "Speak directly to you", "Validate effort, never shame failure", "Keep it practical and emotional — never abstract")
+          * Signature phrases from documents (e.g., "Systems > Willpower", "Stop starting over", "Build structure, not stress", "Real food. Real life. Real results.")
+          * What to avoid (e.g., "No buzzwords: avoid 'grind,' 'discipline,' 'hustle'", "No yelling or motivational bootcamp style")
+          * Examples of how the tone appears in practice (e.g., "You're not yelling from the stage — you're sitting next to them at the table")
+          * Content modes/frameworks (e.g., Authority Mode, Relatable Mode, Disruption Mode)
         - ALWAYS quote or reference specific details from the document context when answering
+        - For tone questions, provide a COMPLETE answer covering ALL aspects: tone descriptors, voice rules, signature phrases, what to avoid, practical examples, and content frameworks
+        - DO NOT give short, generic answers - provide comprehensive, detailed responses that fully answer the question
         - If information isn't in the context, say "Based on your documents, I don't see specific information about [topic], but here's what I know from your brand guidelines..."
 
         STRUCTURED OUTPUTS REQUIRED:
@@ -588,7 +598,7 @@ If document context is provided above, you MUST use it. This is not optional.
                     api_params = {
                         "model": model_name,
                         "messages": messages,
-                        "max_completion_tokens": kwargs.get("max_tokens", 4000),
+                        "max_completion_tokens": kwargs.get("max_tokens", 6000),  # Increased for comprehensive answers
                         "temperature": 0.7,
                         "top_p": 1.0,
                         "n": 1,
@@ -853,7 +863,7 @@ Generate a complete, production-ready video script."""
                         {"role": "system", "content": "You are a professional video scriptwriter specializing in personal storytelling and documentary-style content. Create engaging, emotionally resonant scripts that bring stories to life."},
                         {"role": "user", "content": script_prompt}
                     ],
-                    max_completion_tokens=kwargs.get("max_tokens", 4000),
+                    max_completion_tokens=kwargs.get("max_tokens", 6000),  # Increased for comprehensive answers
                     temperature=0.7,
                     top_p=1.0,
                     n=1,
