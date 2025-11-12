@@ -120,7 +120,7 @@ class DocumentProcessor:
             }
         ):
             try:
-                print(f"📄 Processing document: {filename} (type: {content_type})")
+                print(f"[DOC] Processing document: {filename} (type: {content_type})")
                 
                 # Step 1: Extract text based on file type
                 text_content = await self._extract_text(file_content, filename, content_type)
@@ -132,7 +132,7 @@ class DocumentProcessor:
                         "chunks_processed": 0
                     }
                 
-                print(f"📝 Extracted {len(text_content)} characters of text")
+                print(f"[TEXT] Extracted {len(text_content)} characters of text")
                 
                 # Step 2: Split text into chunks
                 chunks = self._split_text_into_chunks(text_content)
@@ -144,7 +144,7 @@ class DocumentProcessor:
                         "chunks_processed": 0
                     }
                 
-                print(f"📚 Created {len(chunks)} text chunks")
+                print(f"[DOCS] Created {len(chunks)} text chunks")
                 
                 # Step 3: Generate embeddings for each chunk
                 chunks_processed = 0
@@ -174,9 +174,9 @@ class DocumentProcessor:
                         
                         if embedding_id:
                             embeddings_created += 1
-                            print(f"✅ Created embedding for chunk {i+1}/{len(chunks)}")
+                            print(f"[OK] Created embedding for chunk {i+1}/{len(chunks)}")
                         else:
-                            print(f"❌ Failed to store embedding for chunk {i+1}")
+                            print(f"[X] Failed to store embedding for chunk {i+1}")
                         
                         chunks_processed += 1
                         
@@ -184,7 +184,7 @@ class DocumentProcessor:
                         await asyncio.sleep(0.1)
                         
                     except Exception as chunk_error:
-                        print(f"❌ Error processing chunk {i+1}: {chunk_error}")
+                        print(f"[X] Error processing chunk {i+1}: {chunk_error}")
                         continue
                 
                 # Step 4: Update asset record with processing status
@@ -207,7 +207,7 @@ class DocumentProcessor:
                 }
                 
             except Exception as e:
-                print(f"❌ Error processing document {filename}: {e}")
+                print(f"[X] Error processing document {filename}: {e}")
                 
                 # Update asset record with error status
                 await self._update_asset_processing_status(
@@ -241,7 +241,7 @@ class DocumentProcessor:
                     return ""
                     
         except Exception as e:
-            print(f"❌ Error extracting text from {filename}: {e}")
+            print(f"[X] Error extracting text from {filename}: {e}")
             return ""
     
     async def _extract_pdf_text(self, file_content: bytes) -> str:
@@ -258,13 +258,13 @@ class DocumentProcessor:
                     if page_text:
                         text += f"\n--- Page {page_num + 1} ---\n{page_text}\n"
                 except Exception as page_error:
-                    print(f"⚠️ Error extracting page {page_num + 1}: {page_error}")
+                    print(f"[WARN] Error extracting page {page_num + 1}: {page_error}")
                     continue
             
             return text.strip()
             
         except Exception as e:
-            print(f"❌ Error reading PDF: {e}")
+            print(f"[X] Error reading PDF: {e}")
             return ""
     
     async def _extract_docx_text(self, file_content: bytes) -> str:
@@ -282,7 +282,7 @@ class DocumentProcessor:
             return text.strip()
             
         except Exception as e:
-            print(f"❌ Error reading DOCX: {e}")
+            print(f"[X] Error reading DOCX: {e}")
             return ""
     
     def _split_text_into_chunks(self, text: str) -> List[str]:
@@ -353,7 +353,7 @@ class DocumentProcessor:
         try:
             # If Supabase is not available, just log the status
             if not self.supabase:
-                print(f"⚠️ Supabase not configured - asset {asset_id} status: {status}, metadata: {metadata}")
+                print(f"[WARN] Supabase not configured - asset {asset_id} status: {status}, metadata: {metadata}")
                 return
             
             update_data = {
@@ -368,12 +368,12 @@ class DocumentProcessor:
                 .execute()
             
             if result.data:
-                print(f"✅ Updated asset {asset_id} with status: {status}")
+                print(f"[OK] Updated asset {asset_id} with status: {status}")
             else:
-                print(f"⚠️ Failed to update asset {asset_id} status")
+                print(f"[WARN] Failed to update asset {asset_id} status")
                 
         except Exception as e:
-            print(f"❌ Error updating asset status: {e}")
+            print(f"[X] Error updating asset status: {e}")
     
     async def _get_document_context_impl(
         self,
@@ -388,20 +388,20 @@ class DocumentProcessor:
         """
         try:
             if not self.supabase:
-                print("⚠️ DocumentProcessor: Supabase not configured - cannot retrieve document context")
+                print("[WARN] DocumentProcessor: Supabase not configured - cannot retrieve document context")
                 return []
             
-            print(f"🔍 DocumentProcessor: Searching for document chunks")
-            print(f"🔍 DocumentProcessor: user_id={user_id} (type: {type(user_id)}), project_id={project_id}")
-            print(f"🔍 DocumentProcessor: match_count={match_count}, similarity_threshold={similarity_threshold}")
+            print(f"[SEARCH] DocumentProcessor: Searching for document chunks")
+            print(f"[SEARCH] DocumentProcessor: user_id={user_id} (type: {type(user_id)}), project_id={project_id}")
+            print(f"[SEARCH] DocumentProcessor: match_count={match_count}, similarity_threshold={similarity_threshold}")
             
             # Debug: Check embedding format
-            print(f"🔍 DocumentProcessor: Query embedding type: {type(query_embedding)}, length: {len(query_embedding) if query_embedding else 'None'}")
+            print(f"[SEARCH] DocumentProcessor: Query embedding type: {type(query_embedding)}, length: {len(query_embedding) if query_embedding else 'None'}")
             if query_embedding:
-                print(f"🔍 DocumentProcessor: First few values: {query_embedding[:5]}")
+                print(f"[SEARCH] DocumentProcessor: First few values: {query_embedding[:5]}")
             
             # Debug: Try a very simple query first to see if the function works at all
-            print(f"🔍 DocumentProcessor: Testing RPC function with minimal parameters...")
+            print(f"[SEARCH] DocumentProcessor: Testing RPC function with minimal parameters...")
             try:
                 # Test with a very low threshold and high match count
                 test_result = self.supabase.rpc(
@@ -414,15 +414,15 @@ class DocumentProcessor:
                         'similarity_threshold': 0.01  # Very low threshold
                     }
                 ).execute()
-                print(f"🔍 DocumentProcessor: Test RPC result: {test_result}")
-                print(f"🔍 DocumentProcessor: Test result data: {test_result.data}")
+                print(f"[SEARCH] DocumentProcessor: Test RPC result: {test_result}")
+                print(f"[SEARCH] DocumentProcessor: Test result data: {test_result.data}")
             except Exception as e:
-                print(f"🔍 DocumentProcessor: Test RPC error: {e}")
+                print(f"[SEARCH] DocumentProcessor: Test RPC error: {e}")
             
             # Use lower threshold to ensure we find documents (0.1 instead of 0.7)
             # Vector similarity can be lower even for relevant content
             effective_threshold = min(similarity_threshold, 0.1)  # Cap at 0.1 for better retrieval
-            print(f"🔍 DocumentProcessor: Using effective similarity threshold: {effective_threshold}")
+            print(f"[SEARCH] DocumentProcessor: Using effective similarity threshold: {effective_threshold}")
             
             result = self.supabase.rpc(
                 'get_similar_document_chunks',
@@ -435,28 +435,28 @@ class DocumentProcessor:
                 }
             ).execute()
             
-            print(f"🔍 DocumentProcessor: RPC result: {result}")
-            print(f"🔍 DocumentProcessor: Result data length: {len(result.data) if result.data else 0}")
+            print(f"[SEARCH] DocumentProcessor: RPC result: {result}")
+            print(f"[SEARCH] DocumentProcessor: Result data length: {len(result.data) if result.data else 0}")
             if result.data:
-                print(f"🔍 DocumentProcessor: First chunk preview: {result.data[0].get('chunk_text', '')[:200] if result.data else 'None'}")
+                print(f"[SEARCH] DocumentProcessor: First chunk preview: {result.data[0].get('chunk_text', '')[:200] if result.data else 'None'}")
             
             if result.data:
-                print(f"📚 Found {len(result.data)} relevant document chunks")
+                print(f"[DOCS] Found {len(result.data)} relevant document chunks")
                 # Debug: Check user isolation
                 for chunk in result.data:
                     chunk_user_id = chunk.get('user_id')
                     similarity_score = chunk.get('similarity', 0)
                     print(f"  - Chunk from user {chunk_user_id}, similarity: {similarity_score:.3f}")
                     if chunk_user_id != str(user_id):
-                        print(f"🚨 SECURITY WARNING: Found document chunk from different user! Expected: {user_id}, Found: {chunk_user_id}")
+                        print(f"[SECURITY] SECURITY WARNING: Found document chunk from different user! Expected: {user_id}, Found: {chunk_user_id}")
                 return result.data
             else:
-                print("📚 No relevant document chunks found")
-                print(f"📚 Debug: user_id={user_id}, project_id={project_id}, threshold={effective_threshold}")
+                print("[DOCS] No relevant document chunks found")
+                print(f"[DOCS] Debug: user_id={user_id}, project_id={project_id}, threshold={effective_threshold}")
                 return []
                 
         except Exception as e:
-            print(f"❌ Error retrieving document context: {e}")
+            print(f"[X] Error retrieving document context: {e}")
             return []
     
     async def get_document_context(

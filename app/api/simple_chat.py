@@ -511,6 +511,7 @@ async def chat(
                                     user_message=chat_request.text,
                                     user_id=rag_user_id,
                                     project_id=None,
+                                    session_id=UUID(session_id),  # NEW: Pass session_id for chat isolation
                                     conversation_history=conversation_history
                                 ),
                                 timeout=5.0  # Increased to 5s to allow document retrieval to complete

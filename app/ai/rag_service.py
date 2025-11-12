@@ -129,6 +129,7 @@ class RAGService:
         user_message: str,
         user_id: UUID,
         project_id: Optional[UUID] = None,
+        session_id: Optional[UUID] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None
     ) -> Dict[str, Any]:
         """
@@ -138,6 +139,7 @@ class RAGService:
             user_message: Current user message
             user_id: ID of the user
             project_id: Optional project ID
+            session_id: Optional session ID for session isolation (CRITICAL: filters messages to current session only)
             conversation_history: Optional recent conversation history
             
         Returns:
@@ -196,10 +198,12 @@ class RAGService:
                 query_embedding = await self._get_embedding_service().generate_query_embedding(query_text)
                 
                 # Step 3: Retrieve user-specific context (with explicit parent run tree)
+                # CRITICAL: Pass session_id to ensure session isolation - only get messages from current session
                 user_context = await self.vector_storage.get_similar_user_messages(
                     query_embedding=query_embedding,
                     user_id=user_id,
                     project_id=project_id,
+                    session_id=session_id,  # NEW: Filter by session for isolation
                     match_count=self.user_match_count,
                     similarity_threshold=self.similarity_threshold,
                     parent_run_tree=rag_run_tree
@@ -215,10 +219,10 @@ class RAGService:
                 )
                 
                 # Step 5: Retrieve document context (with explicit parent run tree)
-                print(f"🔍 [RAG] Calling get_document_context")
+                print(f"[RAG] Calling get_document_context")
                 document_context = []
                 try:
-                    print(f"🔍 [RAG] Starting document retrieval...")
+                    print(f"[RAG] Starting document retrieval...")
                     # Increase match_count for better coverage, especially for brand questions
                     document_context = await document_processor.get_document_context(
                         query_embedding=query_embedding,
@@ -228,9 +232,9 @@ class RAGService:
                         similarity_threshold=0.1,
                         parent_run_tree=rag_run_tree
                     )
-                    print(f"✅ [RAG] Retrieved {len(document_context)} document chunks")
+                    print(f"[OK] [RAG] Retrieved {len(document_context)} document chunks")
                 except Exception as doc_error:
-                    print(f"❌ [RAG] Error retrieving document context: {doc_error}")
+                    print(f"[X] [RAG] Error retrieving document context: {doc_error}")
                     import traceback
                     print(traceback.format_exc())
                     document_context = []
@@ -247,15 +251,15 @@ class RAGService:
                     "has_conversation_history": bool(conversation_history)
                 }
                 
-                print(f"📊 [RAG] Final summary: {len(user_context)} user contexts, {len(global_context)} global patterns, {len(document_context)} document chunks")
-                print(f"📊 [RAG] Combined context text length: {len(combined_context_text)} chars")
+                print(f"[STATS] [RAG] Final summary: {len(user_context)} user contexts, {len(global_context)} global patterns, {len(document_context)} document chunks")
+                print(f"[STATS] [RAG] Combined context text length: {len(combined_context_text)} chars")
                 if combined_context_text:
-                    print(f"📊 [RAG] Combined context preview (first 300 chars): {combined_context_text[:300]}...")
+                    print(f"[STATS] [RAG] Combined context preview (first 300 chars): {combined_context_text[:300]}...")
                 if document_context:
-                    print(f"✅ [RAG] SUCCESS: Document context will be included in AI prompt!")
-                    print(f"✅ [RAG] Document chunks in context: {len(document_context)}")
+                    print(f"[OK] [RAG] SUCCESS: Document context will be included in AI prompt!")
+                    print(f"[OK] [RAG] Document chunks in context: {len(document_context)}")
                 else:
-                    print(f"⚠️ [RAG] WARNING: No document context retrieved - AI won't have document information")
+                    print(f"[WARN] [RAG] WARNING: No document context retrieved - AI won't have document information")
                 
                 return {
                     "user_context": user_context,

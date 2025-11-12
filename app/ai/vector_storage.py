@@ -105,20 +105,24 @@ class VectorStorageService:
         query_embedding: List[float],
         user_id: UUID,
         project_id: Optional[UUID] = None,
+        session_id: Optional[UUID] = None,
         match_count: int = 10,
         similarity_threshold: float = 0.7
     ) -> List[Dict[str, Any]]:
         """
         Internal implementation of user message retrieval
+        CRITICAL: session_id ensures session isolation - only retrieves messages from current session
         """
         try:
             # Call the Supabase function
+            # session_id is optional - if provided, filters to that session only (for chat isolation)
             result = self.supabase.rpc(
                 'get_similar_user_messages',
                 {
                     'query_embedding': query_embedding,
                     'query_user_id': str(user_id),
                     'query_project_id': str(project_id) if project_id else None,
+                    'query_session_id': str(session_id) if session_id else None,  # NEW: Session filter for isolation
                     'match_count': match_count,
                     'similarity_threshold': similarity_threshold
                 }
@@ -126,11 +130,14 @@ class VectorStorageService:
             
             if result.data:
                 print(f"SUCCESS: Found {len(result.data)} similar user messages")
-                # Debug: Check user isolation
+                # Debug: Check user and session isolation
                 for message in result.data:
                     msg_user_id = message.get('user_id')
+                    msg_session_id = message.get('session_id')
                     if msg_user_id != str(user_id):
-                        print(f"🚨 SECURITY WARNING: Found message from different user! Expected: {user_id}, Found: {msg_user_id}")
+                        print(f"[SECURITY] WARNING: Found message from different user! Expected: {user_id}, Found: {msg_user_id}")
+                    if session_id and msg_session_id != str(session_id):
+                        print(f"[SECURITY] WARNING: Found message from different session! Expected: {session_id}, Found: {msg_session_id}")
                 return result.data
             else:
                 print("INFO: No similar user messages found")
@@ -145,6 +152,7 @@ class VectorStorageService:
         query_embedding: List[float],
         user_id: UUID,
         project_id: Optional[UUID] = None,
+        session_id: Optional[UUID] = None,
         match_count: int = 10,
         similarity_threshold: float = 0.7,
         parent_run_tree: Optional["RunTree"] = None
@@ -156,6 +164,7 @@ class VectorStorageService:
             query_embedding: Query embedding vector
             user_id: ID of the user
             project_id: Optional project ID to filter by
+            session_id: Optional session ID to filter by (CRITICAL: ensures session isolation - only gets messages from current session)
             match_count: Maximum number of results
             similarity_threshold: Minimum similarity score (0-1)
             parent_run_tree: Optional parent run tree for explicit context propagation
@@ -173,6 +182,7 @@ class VectorStorageService:
                 "metadata": {
                     "user_id": str(user_id),
                     "project_id": str(project_id) if project_id else None,
+                    "session_id": str(session_id) if session_id else None,
                     "match_count": match_count,
                     "similarity_threshold": similarity_threshold,
                     "embedding_dimension": len(query_embedding) if query_embedding else 0
@@ -187,6 +197,7 @@ class VectorStorageService:
                     query_embedding=query_embedding,
                     user_id=user_id,
                     project_id=project_id,
+                    session_id=session_id,  # Pass session_id for isolation
                     match_count=match_count,
                     similarity_threshold=similarity_threshold
                 )
@@ -195,6 +206,7 @@ class VectorStorageService:
                 query_embedding=query_embedding,
                 user_id=user_id,
                 project_id=project_id,
+                session_id=session_id,  # Pass session_id for isolation
                 match_count=match_count,
                 similarity_threshold=similarity_threshold
             )
