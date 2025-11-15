@@ -1,0 +1,7 @@
+# Optional dependencies for enhanced features
+# These are not required for basic functionality
+# Install separately if needed: pip install -r requirements-optional.txt
+
+# Web search functionality (requires TAVILY_API_KEY environment variable)
+tavily-python>=0.3.0
+
