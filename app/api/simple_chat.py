@@ -98,88 +98,6 @@ async def _generate_conversation_transcript(conversation_history: List[Dict]) ->
         return f"Transcript generation failed: {str(e)}"
 
 
-async def _queue_for_validation(
-    user_email: Optional[str],
-    user_name: Optional[str],
-    project_id: str,
-    dossier_snapshot: Optional[dict],
-    conversation_transcript: str,
-    generated_script: str,
-    session_id: str,
-    user_id: str,
-) -> None:
-    """Queue story completion for human validation before client delivery."""
-    try:
-        print(f"📋 [VALIDATION] Starting validation queue process...")
-        print(f"📋 [VALIDATION] Project ID: {project_id}")
-        print(f"📋 [VALIDATION] User ID: {user_id}")
-        print(f"📋 [VALIDATION] Session ID: {session_id}")
-        print(f"📋 [VALIDATION] User Email: {user_email}")
-        print(f"📋 [VALIDATION] Transcript length: {len(conversation_transcript)} chars")
-        print(f"📋 [VALIDATION] Script length: {len(generated_script)} chars")
-        
-        from ..services.email_service import EmailService  # type: ignore
-        from ..services.validation_service import validation_service  # type: ignore
-        
-        # Store validation request in database
-        print(f"📋 [VALIDATION] Creating validation request in database...")
-        validation_request = await validation_service.create_validation_request(
-            project_id=UUID(project_id),
-            user_id=UUID(user_id),
-            session_id=UUID(session_id),
-            conversation_transcript=conversation_transcript,
-            generated_script=generated_script,
-            client_email=user_email,
-            client_name=user_name
-        )
-        
-        if not validation_request:
-            print("⚠️ [VALIDATION] Failed to create validation request in database - falling back to direct client email")
-            await _send_completion_email(user_email, user_name, project_id, dossier_snapshot, generated_script)
-            return
-        
-        validation_id = validation_request['validation_id']
-        print(f"✅ [VALIDATION] Validation request created in database: {validation_id}")
-        
-        # Send email notification to internal team
-        service = EmailService()
-        if not service.available:
-            print("⚠️ EmailService unavailable - validation stored in database but no email sent")
-            return
-        
-        # Get internal team emails from environment
-        internal_emails_str = os.getenv("CLIENT_EMAIL", "team@storiesweetell.com")
-        internal_emails = [email.strip() for email in internal_emails_str.split(",") if email.strip()]
-        print(f"📧 Sending validation notification to internal team: {internal_emails}")
-        
-        story_data = dossier_snapshot or {}
-        
-        # Send to internal team for validation
-        ok = await service.send_validation_request(
-            internal_emails=internal_emails,
-            project_id=project_id,
-            story_data=story_data,
-            transcript=conversation_transcript,
-            generated_script=generated_script,
-            client_email=user_email,
-            client_name=user_name or "Anonymous",
-            validation_id=validation_id
-        )
-        
-        if ok:
-            print("📧 Validation notification sent to internal team")
-            # Update status to indicate email was sent
-            await validation_service.update_validation_status(
-                validation_id=UUID(validation_id),
-                status='pending'  # Keep as pending but note email sent
-            )
-        else:
-            print("⚠️ Validation notification failed but request is stored in database")
-            
-    except Exception as e:
-        print(f"⚠️ Validation queue failed: {e}")
-        print("🔄 Falling back to direct client email")
-        await _send_completion_email(user_email, user_name, project_id, dossier_snapshot, generated_script)
 
 
 async def _send_completion_email(
@@ -787,23 +705,17 @@ async def chat(
                                     print("⚠️ Authenticated user but no email found in database")
                                 user_email = None
 
-                            # Queue for human validation instead of direct client email
-                            try:
-                                await _queue_for_validation(
-                                    user_email=user_email,
-                                    user_name=user_name,
-                                    project_id=str(project_id),
-                                    dossier_snapshot=dossier_snapshot,
-                                    conversation_transcript=transcript,
-                                    generated_script=generated_script,
-                                    session_id=str(session_id),
-                                    user_id=str(user_id),
-                                )
-                                print("✅ [VALIDATION] Successfully queued story for validation")
-                            except Exception as validation_error:
-                                print(f"❌ [VALIDATION] CRITICAL ERROR queuing for validation: {validation_error}")
-                                import traceback
-                                print(f"❌ [VALIDATION] Traceback: {traceback.format_exc()}")
+                            # Send completion email directly to user
+                            if user_email:
+                                try:
+                                    await _send_completion_email(user_email, user_name, str(project_id), dossier_snapshot, generated_script)
+                                    print("✅ [EMAIL] Successfully sent completion email to user")
+                                except Exception as email_error:
+                                    print(f"❌ [EMAIL] Failed to send completion email: {email_error}")
+                                    import traceback
+                                    print(f"❌ [EMAIL] Traceback: {traceback.format_exc()}")
+                            else:
+                                print("⚠️ [EMAIL] No user email available - skipping email notification")
 
                             # mark session inactive
                             try:
