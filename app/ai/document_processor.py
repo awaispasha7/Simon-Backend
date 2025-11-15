@@ -5,63 +5,15 @@ Handles text extraction and embedding generation for uploaded documents
 
 import os
 import asyncio
-from typing import List, Dict, Any, Optional, Tuple, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from langsmith import RunTree
-
+from typing import List, Dict, Any, Optional, Tuple
 from uuid import UUID, uuid4
-# Optional PyPDF2 import for serverless (large dependency)
-try:
-    import PyPDF2
-    HAS_PYPDF2 = True
-except ImportError:
-    HAS_PYPDF2 = False
-    PyPDF2 = None
-
-# Optional docx import for serverless (large dependency)
-try:
-    import docx
-    HAS_DOCX = True
-except ImportError:
-    HAS_DOCX = False
-    docx = None
+import PyPDF2
+import docx
 from io import BytesIO
 import re
 from .embedding_service import get_embedding_service
 from .vector_storage import vector_storage
 from ..database.supabase import get_supabase_client
-
-# LangSmith integration
-# Use tracing_context for async functions (more reliable than @traceable)
-try:
-    from langsmith.run_helpers import tracing_context
-    from .langsmith_config import create_trace
-    import os
-    from dotenv import load_dotenv
-    load_dotenv()
-    
-    # Get config
-    LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT", "simon-chatbot")
-    LANGSMITH_WORKSPACE_ID = os.getenv("LANGSMITH_WORKSPACE_ID")
-    
-    # Ensure environment variables are set
-    if LANGSMITH_PROJECT:
-        os.environ["LANGSMITH_PROJECT"] = LANGSMITH_PROJECT
-    if LANGSMITH_WORKSPACE_ID:
-        os.environ["LANGSMITH_WORKSPACE_ID"] = LANGSMITH_WORKSPACE_ID
-    os.environ["LANGSMITH_TRACING"] = "true"
-    
-    LANGSMITH_AVAILABLE = True
-except ImportError:
-    LANGSMITH_AVAILABLE = False
-    tracing_context = None
-    from contextlib import nullcontext as tracing_context
-    def create_trace(*args, **kwargs):
-        from contextlib import nullcontext
-        return nullcontext()
-    LANGSMITH_PROJECT = None
-    LANGSMITH_WORKSPACE_ID = None
 
 
 class DocumentProcessor:
@@ -105,122 +57,108 @@ class DocumentProcessor:
         Returns:
             Dict containing processing results
         """
-        # LangSmith tracing for document processing
-        with create_trace(
-            name="process_document",
-            run_type="chain",
-            tags=["document_processing", "embedding", "storage"],
-            metadata={
-                "asset_id": str(asset_id),
-                "user_id": str(user_id),
-                "project_id": str(project_id),
-                "filename": filename,
-                "content_type": content_type,
-                "file_size_bytes": len(file_content)
-            }
-        ):
-            try:
-                print(f"[DOC] Processing document: {filename} (type: {content_type})")
-                
-                # Step 1: Extract text based on file type
-                text_content = await self._extract_text(file_content, filename, content_type)
-                
-                if not text_content or not text_content.strip():
-                    return {
-                        "success": False,
-                        "error": "No text content extracted from document",
-                        "chunks_processed": 0
-                    }
-                
-                print(f"[TEXT] Extracted {len(text_content)} characters of text")
-                
-                # Step 2: Split text into chunks
-                chunks = self._split_text_into_chunks(text_content)
-                
-                if not chunks:
-                    return {
-                        "success": False,
-                        "error": "No text chunks created from document",
-                        "chunks_processed": 0
-                    }
-                
-                print(f"[DOCS] Created {len(chunks)} text chunks")
-                
-                # Step 3: Generate embeddings for each chunk
-                chunks_processed = 0
-                embeddings_created = 0
-                
-                for i, chunk in enumerate(chunks[:self.max_chunks_per_document]):
-                    try:
-                        # Generate embedding for this chunk
-                        embedding = await self._get_embedding_service().generate_embedding(chunk)
-                        
-                        # Store embedding in database
-                        embedding_id = await vector_storage.store_document_embedding(
-                            asset_id=asset_id,
-                            user_id=user_id,
-                            project_id=project_id,
-                            document_type=self._get_document_type(filename),
-                            chunk_index=i,
-                            chunk_text=chunk,
-                            embedding=embedding,
-                            metadata={
-                                "filename": filename,
-                                "content_type": content_type,
-                                "chunk_size": len(chunk),
-                                "total_chunks": len(chunks)
-                            }
-                        )
-                        
-                        if embedding_id:
-                            embeddings_created += 1
-                            print(f"[OK] Created embedding for chunk {i+1}/{len(chunks)}")
-                        else:
-                            print(f"[X] Failed to store embedding for chunk {i+1}")
-                        
-                        chunks_processed += 1
-                        
-                        # Small delay to avoid rate limiting
-                        await asyncio.sleep(0.1)
-                        
-                    except Exception as chunk_error:
-                        print(f"[X] Error processing chunk {i+1}: {chunk_error}")
-                        continue
-                
-                # Step 4: Update asset record with processing status
-                await self._update_asset_processing_status(
-                    asset_id, 
-                    "processed", 
-                    {
-                        "chunks_processed": chunks_processed,
-                        "embeddings_created": embeddings_created,
-                        "total_text_length": len(text_content)
-                    }
-                )
-                
-                return {
-                    "success": True,
-                    "chunks_processed": chunks_processed,
-                    "embeddings_created": embeddings_created,
-                    "total_text_length": len(text_content),
-                    "document_type": self._get_document_type(filename)
-                }
-                
-            except Exception as e:
-                print(f"[X] Error processing document {filename}: {e}")
-                
-                # Update asset record with error status
-                await self._update_asset_processing_status(
-                    asset_id, 
-                    "failed", 
-                    {"error": str(e)}
-                )
-                
+        try:
+            print(f"📄 Processing document: {filename} (type: {content_type})")
+            
+            # Step 1: Extract text based on file type
+            text_content = await self._extract_text(file_content, filename, content_type)
+            
+            if not text_content or not text_content.strip():
                 return {
                     "success": False,
-                    "error": str(e),
+                    "error": "No text content extracted from document",
                     "chunks_processed": 0
                 }
+            
+            print(f"📝 Extracted {len(text_content)} characters of text")
+            
+            # Step 2: Split text into chunks
+            chunks = self._split_text_into_chunks(text_content)
+            
+            if not chunks:
+                return {
+                    "success": False,
+                    "error": "No text chunks created from document",
+                    "chunks_processed": 0
+                }
+            
+            print(f"📚 Created {len(chunks)} text chunks")
+            
+            # Step 3: Generate embeddings for each chunk
+            chunks_processed = 0
+            embeddings_created = 0
+            
+            for i, chunk in enumerate(chunks[:self.max_chunks_per_document]):
+                try:
+                    # Generate embedding for this chunk
+                    embedding = await self._get_embedding_service().generate_embedding(chunk)
+                    
+                    # Store embedding in database
+                    embedding_id = await vector_storage.store_document_embedding(
+                        asset_id=asset_id,
+                        user_id=user_id,
+                        project_id=project_id,
+                        document_type=self._get_document_type(filename),
+                        chunk_index=i,
+                        chunk_text=chunk,
+                        embedding=embedding,
+                        metadata={
+                            "filename": filename,
+                            "content_type": content_type,
+                            "chunk_size": len(chunk),
+                            "total_chunks": len(chunks)
+                        }
+                    )
+                    
+                    if embedding_id:
+                        embeddings_created += 1
+                        print(f"✅ Created embedding for chunk {i+1}/{len(chunks)}")
+                    else:
+                        print(f"❌ Failed to store embedding for chunk {i+1}")
+                    
+                    chunks_processed += 1
+                    
+                    # Small delay to avoid rate limiting
+                    await asyncio.sleep(0.1)
+                    
+                except Exception as chunk_error:
+                    print(f"❌ Error processing chunk {i+1}: {chunk_error}")
+                    continue
+            
+            # Step 4: Update asset record with processing status
+            await self._update_asset_processing_status(
+                asset_id, 
+                "processed", 
+                {
+                    "chunks_processed": chunks_processed,
+                    "embeddings_created": embeddings_created,
+                    "total_text_length": len(text_content)
+                }
+            )
+            
+            return {
+                "success": True,
+                "chunks_processed": chunks_processed,
+                "embeddings_created": embeddings_created,
+                "total_text_length": len(text_content),
+                "document_type": self._get_document_type(filename)
+            }
+            
+        except Exception as e:
+            print(f"❌ Error processing document {filename}: {e}")
+            
+            # Update asset record with error status
+            await self._update_asset_processing_status(
+                asset_id, 
+                "failed", 
+                {"error": str(e)}
+            )
+            
+            return {
+                "success": False,
+                "error": str(e),
+                "chunks_processed": 0
+            }
     
     async def _extract_text(self, file_content: bytes, filename: str, content_type: str) -> str:
         """Extract text from various document formats"""
@@ -241,13 +179,11 @@ class DocumentProcessor:
                     return ""
                     
         except Exception as e:
-            print(f"[X] Error extracting text from {filename}: {e}")
+            print(f"❌ Error extracting text from {filename}: {e}")
             return ""
     
     async def _extract_pdf_text(self, file_content: bytes) -> str:
         """Extract text from PDF file"""
-        if not HAS_PYPDF2:
-            return "PDF processing not available (PyPDF2 not installed)"
         try:
             pdf_reader = PyPDF2.PdfReader(BytesIO(file_content))
             text = ""
@@ -258,19 +194,17 @@ class DocumentProcessor:
                     if page_text:
                         text += f"\n--- Page {page_num + 1} ---\n{page_text}\n"
                 except Exception as page_error:
-                    print(f"[WARN] Error extracting page {page_num + 1}: {page_error}")
+                    print(f"⚠️ Error extracting page {page_num + 1}: {page_error}")
                     continue
             
             return text.strip()
             
         except Exception as e:
-            print(f"[X] Error reading PDF: {e}")
+            print(f"❌ Error reading PDF: {e}")
             return ""
     
     async def _extract_docx_text(self, file_content: bytes) -> str:
         """Extract text from DOCX file"""
-        if not HAS_DOCX:
-            return "DOCX processing not available (python-docx not installed)"
         try:
             doc = docx.Document(BytesIO(file_content))
             text = ""
@@ -282,7 +216,7 @@ class DocumentProcessor:
             return text.strip()
             
         except Exception as e:
-            print(f"[X] Error reading DOCX: {e}")
+            print(f"❌ Error reading DOCX: {e}")
             return ""
     
     def _split_text_into_chunks(self, text: str) -> List[str]:
@@ -351,11 +285,6 @@ class DocumentProcessor:
     ):
         """Update asset record with processing status"""
         try:
-            # If Supabase is not available, just log the status
-            if not self.supabase:
-                print(f"[WARN] Supabase not configured - asset {asset_id} status: {status}, metadata: {metadata}")
-                return
-            
             update_data = {
                 "processing_status": status,
                 "processing_metadata": metadata,
@@ -368,14 +297,14 @@ class DocumentProcessor:
                 .execute()
             
             if result.data:
-                print(f"[OK] Updated asset {asset_id} with status: {status}")
+                print(f"✅ Updated asset {asset_id} with status: {status}")
             else:
-                print(f"[WARN] Failed to update asset {asset_id} status")
+                print(f"⚠️ Failed to update asset {asset_id} status")
                 
         except Exception as e:
-            print(f"[X] Error updating asset status: {e}")
+            print(f"❌ Error updating asset status: {e}")
     
-    async def _get_document_context_impl(
+    async def get_document_context(
         self,
         query_embedding: List[float],
         user_id: UUID,
@@ -384,24 +313,30 @@ class DocumentProcessor:
         similarity_threshold: float = 0.7
     ) -> List[Dict[str, Any]]:
         """
-        Internal implementation of document context retrieval
+        Retrieve relevant document chunks for RAG context
+        
+        Args:
+            query_embedding: Query embedding vector
+            user_id: ID of the user
+            project_id: Optional project ID to filter by
+            match_count: Maximum number of chunks to retrieve
+            similarity_threshold: Minimum similarity score
+            
+        Returns:
+            List of relevant document chunks
         """
         try:
-            if not self.supabase:
-                print("[WARN] DocumentProcessor: Supabase not configured - cannot retrieve document context")
-                return []
-            
-            print(f"[SEARCH] DocumentProcessor: Searching for document chunks")
-            print(f"[SEARCH] DocumentProcessor: user_id={user_id} (type: {type(user_id)}), project_id={project_id}")
-            print(f"[SEARCH] DocumentProcessor: match_count={match_count}, similarity_threshold={similarity_threshold}")
+            print(f"🔍 DocumentProcessor: Searching for document chunks")
+            print(f"🔍 DocumentProcessor: user_id={user_id}, project_id={project_id}")
+            print(f"🔍 DocumentProcessor: match_count={match_count}, similarity_threshold={similarity_threshold}")
             
             # Debug: Check embedding format
-            print(f"[SEARCH] DocumentProcessor: Query embedding type: {type(query_embedding)}, length: {len(query_embedding) if query_embedding else 'None'}")
+            print(f"🔍 DocumentProcessor: Query embedding type: {type(query_embedding)}, length: {len(query_embedding) if query_embedding else 'None'}")
             if query_embedding:
-                print(f"[SEARCH] DocumentProcessor: First few values: {query_embedding[:5]}")
+                print(f"🔍 DocumentProcessor: First few values: {query_embedding[:5]}")
             
             # Debug: Try a very simple query first to see if the function works at all
-            print(f"[SEARCH] DocumentProcessor: Testing RPC function with minimal parameters...")
+            print(f"🔍 DocumentProcessor: Testing RPC function with minimal parameters...")
             try:
                 # Test with a very low threshold and high match count
                 test_result = self.supabase.rpc(
@@ -414,15 +349,10 @@ class DocumentProcessor:
                         'similarity_threshold': 0.01  # Very low threshold
                     }
                 ).execute()
-                print(f"[SEARCH] DocumentProcessor: Test RPC result: {test_result}")
-                print(f"[SEARCH] DocumentProcessor: Test result data: {test_result.data}")
+                print(f"🔍 DocumentProcessor: Test RPC result: {test_result}")
+                print(f"🔍 DocumentProcessor: Test result data: {test_result.data}")
             except Exception as e:
-                print(f"[SEARCH] DocumentProcessor: Test RPC error: {e}")
-            
-            # Use lower threshold to ensure we find documents (0.1 instead of 0.7)
-            # Vector similarity can be lower even for relevant content
-            effective_threshold = min(similarity_threshold, 0.1)  # Cap at 0.1 for better retrieval
-            print(f"[SEARCH] DocumentProcessor: Using effective similarity threshold: {effective_threshold}")
+                print(f"🔍 DocumentProcessor: Test RPC error: {e}")
             
             result = self.supabase.rpc(
                 'get_similar_document_chunks',
@@ -431,92 +361,28 @@ class DocumentProcessor:
                     'query_user_id': str(user_id),
                     'query_project_id': str(project_id) if project_id else None,
                     'match_count': match_count,
-                    'similarity_threshold': effective_threshold
+                    'similarity_threshold': similarity_threshold
                 }
             ).execute()
             
-            print(f"[SEARCH] DocumentProcessor: RPC result: {result}")
-            print(f"[SEARCH] DocumentProcessor: Result data length: {len(result.data) if result.data else 0}")
-            if result.data:
-                print(f"[SEARCH] DocumentProcessor: First chunk preview: {result.data[0].get('chunk_text', '')[:200] if result.data else 'None'}")
+            print(f"🔍 DocumentProcessor: RPC result: {result}")
+            print(f"🔍 DocumentProcessor: Result data: {result.data}")
             
             if result.data:
-                print(f"[DOCS] Found {len(result.data)} relevant document chunks")
+                print(f"📚 Found {len(result.data)} relevant document chunks")
                 # Debug: Check user isolation
                 for chunk in result.data:
                     chunk_user_id = chunk.get('user_id')
-                    similarity_score = chunk.get('similarity', 0)
-                    print(f"  - Chunk from user {chunk_user_id}, similarity: {similarity_score:.3f}")
                     if chunk_user_id != str(user_id):
-                        print(f"[SECURITY] SECURITY WARNING: Found document chunk from different user! Expected: {user_id}, Found: {chunk_user_id}")
+                        print(f"🚨 SECURITY WARNING: Found document chunk from different user! Expected: {user_id}, Found: {chunk_user_id}")
                 return result.data
             else:
-                print("[DOCS] No relevant document chunks found")
-                print(f"[DOCS] Debug: user_id={user_id}, project_id={project_id}, threshold={effective_threshold}")
+                print("📚 No relevant document chunks found")
                 return []
                 
         except Exception as e:
-            print(f"[X] Error retrieving document context: {e}")
+            print(f"❌ Error retrieving document context: {e}")
             return []
-    
-    async def get_document_context(
-        self,
-        query_embedding: List[float],
-        user_id: UUID,
-        project_id: Optional[UUID] = None,
-        match_count: int = 5,
-        similarity_threshold: float = 0.7,
-        parent_run_tree: Optional["RunTree"] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Retrieve relevant document chunks for RAG context
-        
-        Args:
-            query_embedding: Query embedding vector
-            user_id: ID of the user
-            project_id: Optional project ID to filter by
-            match_count: Maximum number of chunks to retrieve
-            similarity_threshold: Minimum similarity score
-            parent_run_tree: Optional parent run tree for explicit context propagation
-            
-        Returns:
-            List of relevant document chunks
-        """
-        # Use tracing_context with explicit parent for async functions
-        if LANGSMITH_AVAILABLE and tracing_context:
-            trace_kwargs = {
-                "project_name": LANGSMITH_PROJECT,
-                "name": "VectorStoreRetriever_documents",
-                "run_type": "retriever",
-                "tags": ["rag", "vector_search", "retrieval", "documents"],
-                "metadata": {
-                    "user_id": str(user_id),
-                    "project_id": str(project_id) if project_id else None,
-                    "match_count": match_count,
-                    "similarity_threshold": similarity_threshold,
-                    "embedding_dimension": len(query_embedding) if query_embedding else 0
-                }
-            }
-            # Pass parent run tree explicitly if provided
-            if parent_run_tree is not None:
-                trace_kwargs["parent"] = parent_run_tree
-            
-            with tracing_context(**trace_kwargs):
-                return await self._get_document_context_impl(
-                    query_embedding=query_embedding,
-                    user_id=user_id,
-                    project_id=project_id,
-                    match_count=match_count,
-                    similarity_threshold=similarity_threshold
-                )
-        else:
-            return await self._get_document_context_impl(
-                query_embedding=query_embedding,
-                user_id=user_id,
-                project_id=project_id,
-                match_count=match_count,
-                similarity_threshold=similarity_threshold
-            )
 
 
 # Global singleton instance

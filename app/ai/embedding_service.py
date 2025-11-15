@@ -7,36 +7,13 @@ import os
 import asyncio
 from typing import List, Optional, Dict, Any
 from openai import AsyncOpenAI
-
-# Optional numpy import for serverless (large dependency)
-try:
-    import numpy as np
-    HAS_NUMPY = True
-except ImportError:
-    HAS_NUMPY = False
-    np = None
-
-# LangSmith integration
-try:
-    from .langsmith_config import wrap_openai_client, is_langsmith_enabled, create_trace
-    LANGSMITH_AVAILABLE = True
-except ImportError:
-    LANGSMITH_AVAILABLE = False
-    def wrap_openai_client(client):
-        return client
-    def is_langsmith_enabled():
-        return False
-    def create_trace(*args, **kwargs):
-        from contextlib import nullcontext
-        return nullcontext()
+import numpy as np
 
 class EmbeddingService:
     """Service for generating and managing text embeddings"""
     
     def __init__(self):
-        client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        # Wrap with LangSmith for automatic tracing
-        self.client = wrap_openai_client(client)
+        self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.model = "text-embedding-3-small"
         self.dimension = 1536  # text-embedding-3-small dimension
         
@@ -55,27 +32,16 @@ class EmbeddingService:
             text = text.strip()
             if not text:
                 raise ValueError("Cannot generate embedding for empty text")
-            
-            # LangSmith tracing (automatic via wrapped client, but add metadata)
-            with create_trace(
-                name="generate_embedding",
-                run_type="embedding",
-                tags=["embedding", "openai"],
-                metadata={
-                    "model": self.model,
-                    "text_length": len(text),
-                    "dimension": self.dimension
-                }
-            ):
-                response = await self.client.embeddings.create(
-                    model=self.model,
-                    input=text,
-                    encoding_format="float"
-                )
                 
-                embedding = response.data[0].embedding
-                print(f"Generated embedding for text (length: {len(text)} chars, embedding dim: {len(embedding)})")
-                return embedding
+            response = await self.client.embeddings.create(
+                model=self.model,
+                input=text,
+                encoding_format="float"
+            )
+            
+            embedding = response.data[0].embedding
+            print(f"Generated embedding for text (length: {len(text)} chars, embedding dim: {len(embedding)})")
+            return embedding
             
         except Exception as e:
             print(f"ERROR: Failed to generate embedding: {e}")
@@ -102,26 +68,15 @@ class EmbeddingService:
             
             print(f"Generating embeddings for {len(cleaned_texts)} texts...")
             
-            # LangSmith tracing
-            with create_trace(
-                name="generate_embeddings_batch",
-                run_type="embedding",
-                tags=["embedding", "openai", "batch"],
-                metadata={
-                    "model": self.model,
-                    "batch_size": len(cleaned_texts),
-                    "dimension": self.dimension
-                }
-            ):
-                response = await self.client.embeddings.create(
-                    model=self.model,
-                    input=cleaned_texts,
-                    encoding_format="float"
-                )
-                
-                embeddings = [item.embedding for item in response.data]
-                print(f"SUCCESS: Generated {len(embeddings)} embeddings")
-                return embeddings
+            response = await self.client.embeddings.create(
+                model=self.model,
+                input=cleaned_texts,
+                encoding_format="float"
+            )
+            
+            embeddings = [item.embedding for item in response.data]
+            print(f"SUCCESS: Generated {len(embeddings)} embeddings")
+            return embeddings
             
         except Exception as e:
             print(f"ERROR: Failed to generate batch embeddings: {e}")
@@ -145,20 +100,7 @@ class EmbeddingService:
             else:
                 full_query = query
             
-            # LangSmith tracing with query-specific metadata
-            with create_trace(
-                name="generate_query_embedding",
-                run_type="embedding",
-                tags=["embedding", "openai", "query"],
-                metadata={
-                    "model": self.model,
-                    "query_length": len(query),
-                    "has_context": context is not None,
-                    "full_query_length": len(full_query),
-                    "dimension": self.dimension
-                }
-            ):
-                return await self.generate_embedding(full_query)
+            return await self.generate_embedding(full_query)
             
         except Exception as e:
             print(f"ERROR: Failed to generate query embedding: {e}")
@@ -176,18 +118,12 @@ class EmbeddingService:
             Cosine similarity score (0-1)
         """
         try:
-            if not HAS_NUMPY:
-                # Fallback to manual cosine similarity calculation
-                dot_product = sum(a * b for a, b in zip(vec1, vec2))
-                norm1 = sum(a * a for a in vec1) ** 0.5
-                norm2 = sum(b * b for b in vec2) ** 0.5
-            else:
-                v1 = np.array(vec1)
-                v2 = np.array(vec2)
-                
-                dot_product = np.dot(v1, v2)
-                norm1 = np.linalg.norm(v1)
-                norm2 = np.linalg.norm(v2)
+            v1 = np.array(vec1)
+            v2 = np.array(vec2)
+            
+            dot_product = np.dot(v1, v2)
+            norm1 = np.linalg.norm(v1)
+            norm2 = np.linalg.norm(v2)
             
             if norm1 == 0 or norm2 == 0:
                 return 0.0

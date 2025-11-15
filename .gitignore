@@ -1,3 +1,10 @@
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
 # Python
 __pycache__/
 *.py[cod]
@@ -19,19 +26,14 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Virtual Environment
-env/
+# Virtual environments
 venv/
+env/
 ENV/
 env.bak/
 venv.bak/
-.venv/
-
-# Environment variables
-.env
-.env.local
-.env*.local
 
 # IDE
 .vscode/
@@ -46,22 +48,19 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
 
 # Database
 *.db
-*.sqlite
 *.sqlite3
+supabase/
 
-# Vercel
-.vercel
+# Temporary files
+*.tmp
+*.temp
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# pyenv
-.python-version
+20251020 - Client Workflow Proposition - Chatbot.pdf
+Stories We Tell. - Questionaire for LLM - Working draft.docx
+test_rag_complete.py
+client_document.txt
+sample_knowledge.txt

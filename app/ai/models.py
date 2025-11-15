@@ -13,31 +13,10 @@ load_dotenv()
 # Try to import AI packages with error handling
 try:
     import openai
-    from openai import OpenAI
     OPENAI_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: OpenAI not available: {e}")
     OPENAI_AVAILABLE = False
-
-# LangSmith integration
-try:
-    from .langsmith_config import wrap_openai_client, create_trace
-    LANGSMITH_AVAILABLE = True
-except ImportError:
-    LANGSMITH_AVAILABLE = False
-    def wrap_openai_client(client):
-        return client
-    def create_trace(*args, **kwargs):
-        from contextlib import nullcontext
-        return nullcontext()
-
-# Web search integration
-try:
-    from .web_search import web_search_service
-    WEB_SEARCH_AVAILABLE = True
-except ImportError:
-    WEB_SEARCH_AVAILABLE = False
-    web_search_service = None
 
 try:
     import google.generativeai as genai
@@ -65,22 +44,7 @@ class AIModelManager:
     
     def __init__(self):
         # Initialize OpenAI
-        api_key = os.getenv("OPENAI_API_KEY")
-        # Support both old and new clients; prefer new client
-        if api_key:
-            try:
-                client = OpenAI(api_key=api_key)
-                # Wrap with LangSmith for automatic tracing
-                self.openai_client = wrap_openai_client(client)
-            except Exception:
-                self.openai_client = None
-            # Fallback for older usage
-            try:
-                openai.api_key = api_key
-            except Exception:
-                pass
-        else:
-            self.openai_client = None
+        openai.api_key = os.getenv("OPENAI_API_KEY")
 
         # Check if other API keys are available and initialize if they are
         gemini_key = os.getenv("GEMINI_API_KEY")
@@ -102,31 +66,8 @@ class AIModelManager:
         self.model_mapping = {
             TaskType.CHAT: "gpt-4.1-mini",  # Best price-to-quality for high-traffic chat
             TaskType.DESCRIPTION: "gemini-2.5-pro",  # Latest Pro tier for creative reasoning
-            TaskType.SCRIPT: "claude-sonnet-4.5",  # SOTA for structured long-form writing
+            TaskType.SCRIPT: "claude-sonnet-4-5-20250929",  # Latest Claude Sonnet 4.5 (per Anthropic API docs)
             TaskType.SCENE: "gpt-4.1",  # Flagship for deep text generation
-        }
-    
-    def _get_web_search_function(self) -> Optional[Dict[str, Any]]:
-        """Get function definition for web search if available"""
-        if not WEB_SEARCH_AVAILABLE or not web_search_service or not web_search_service.is_enabled():
-            return None
-        
-        return {
-            "type": "function",
-            "function": {
-                "name": "internet_search",
-                "description": "Search the internet for current information, facts, news, or data that may not be in the training data. ALWAYS use this when: 1) User explicitly asks to search (e.g., 'search for', 'look up', 'find information about'), 2) User asks about current events, recent news, or latest information, 3) User asks about statistics, data, or facts that may have changed, 4) User asks 'what's the latest' or 'current' information, 5) User asks about recent research or studies. IMPORTANT: When constructing the search query, ALWAYS include recency terms like 'latest', 'recent', the current year (2025), or 'current' when the user asks about recent information. For example, if user asks 'what are fitness trends?', search for 'latest fitness trends 2025' or 'recent fitness trends'. This ensures you get the most current information.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "The search query to find information on the internet"
-                        }
-                    },
-                    "required": ["query"]
-                }
-            }
         }
     
     def _build_conversation_context(self, conversation_history: list, image_context: str = "") -> str:
@@ -208,7 +149,6 @@ class AIModelManager:
             task_type: The type of task (determines which model to use)
             prompt: The input prompt
             **kwargs: Additional parameters for the specific model
-                - enable_web_search: Optional[bool] - If False, disable web search; if True/None, use default behavior
             
         Returns:
             Dict containing the response and metadata
@@ -232,44 +172,11 @@ class AIModelManager:
                 "error": str(e)
             }
     
-    def _should_force_search(self, prompt: str) -> bool:
-        """Check if web search should be forced based on explicit keywords"""
-        if not prompt:
-            return False
-        
-        prompt_lower = prompt.lower()
-        
-        # Explicit search triggers
-        search_keywords = [
-            "search for",
-            "look up",
-            "find information about",
-            "what's the latest",
-            "current news",
-            "recent research",
-            "latest statistics",
-            "current data",
-            "recent study",
-            "latest trends",
-            "what happened",
-            "news about",
-            "search:",
-            "google:",
-            "internet search"
-        ]
-        
-        return any(keyword in prompt_lower for keyword in search_keywords)
-    
     async def _generate_chat_response(self, prompt: str, **kwargs) -> Dict[str, Any]:
         """Generate chat response using GPT-5 mini as specified by client"""
         try:
             print(f"🤖 Attempting to call OpenAI with model: gpt-4o-mini")
             print(f"🤖 Prompt: '{prompt[:100]}...'")
-            
-            # Check if search should be forced
-            force_search = self._should_force_search(prompt)
-            if force_search:
-                print(f"🔍 [WebSearch] Explicit search trigger detected in query")
             
             # Check for RAG context (includes user messages, documents, and global knowledge)
             rag_context = kwargs.get("rag_context")
@@ -278,194 +185,165 @@ class AIModelManager:
             if rag_context:
                 # Include combined RAG context (user messages + documents + global knowledge)
                 if rag_context.get("combined_context_text"):
-                    # CRITICAL: Make the context VERY prominent and explicit for the AI
-                    # Client needs bot to recognize brand documents (niche, tone, rules, etc.)
-                    # Get document count from metadata (it's nested there)
-                    metadata = rag_context.get('metadata', {})
-                    doc_count = metadata.get('document_context_count', 0) if isinstance(metadata, dict) else 0
-                    if doc_count > 0:
-                        # Strong instruction when documents are found
-                        rag_context_text = f"""
-
-## 🔴 CRITICAL: BRAND DOCUMENTS AND CONTEXT AVAILABLE
-
-The following information comes from the user's uploaded brand documents (North Star, ICP, storytelling rules, hook formulas, content pillars, etc.). You MUST use this information to answer ALL questions about:
-- Brand identity, niche, target audience
-- Tone, voice, and writing style
-- Content rules, hooks, CTAs, storytelling structure
-- Any brand-specific guidelines or preferences
-
-### DOCUMENT CONTEXT (USE THIS INFORMATION):
-{rag_context.get('combined_context_text')}
-
-### CRITICAL INSTRUCTIONS:
-1. When asked "Who is my niche?" or similar brand questions, answer DIRECTLY from the document context above
-2. When creating scripts, hooks, or CTAs, apply the rules and formulas from the documents
-3. When asked about tone, voice, or style, reference the specific guidelines in the documents
-4. NEVER say "I don't have access to your documents" - the context above IS from the documents
-5. If the answer isn't in the context, say "Based on your documents, I don't see specific information about [topic], but here's what I know from your brand guidelines..."
-
-If document context is provided above, you MUST use it. This is not optional.
-
-"""
-                    else:
-                        # Weaker instruction when no documents found
-                        rag_context_text = f"\n\n## RELEVANT CONTEXT FROM PREVIOUS CONVERSATIONS:\n\n{rag_context.get('combined_context_text')}\n\n"
-                    
-                    # Get all counts from metadata (they're nested there)
-                    user_count = metadata.get('user_context_count', 0) if isinstance(metadata, dict) else 0
-                    global_count = metadata.get('global_context_count', 0) if isinstance(metadata, dict) else 0
-                    print(f"📚 Including RAG context: {user_count} user messages, {doc_count} document chunks, {global_count} global patterns")
-                    print(f"📚 Combined context text length: {len(rag_context.get('combined_context_text', ''))} chars")
-                    if rag_context.get('combined_context_text'):
-                        print(f"📚 Combined context preview (first 300 chars): {rag_context.get('combined_context_text', '')[:300]}...")
-                    if doc_count > 0:
-                        print(f"✅ RAG has {doc_count} document chunks - AI MUST use this context for brand questions!")
+                    rag_context_text = f"\n\n## RELEVANT CONTEXT FROM YOUR PREVIOUS CONVERSATIONS:\n{rag_context.get('combined_context_text')}\n"
+                    print(f"📚 Including RAG context: {rag_context.get('user_context_count', 0)} user messages, {rag_context.get('document_context_count', 0)} document chunks, {rag_context.get('global_context_count', 0)} global patterns")
                 else:
-                    print(f"⚠️ RAG context present but no combined_context_text found")
-                    print(f"⚠️ RAG metadata: {rag_context.get('metadata', {})}")
+                    # Fallback: build lightweight context if items exist but combined text wasn't provided
+                    uc = rag_context.get("user_context") or []
+                    dc = rag_context.get("document_context") or []
+                    gc = rag_context.get("global_context") or []
+                    if uc or dc or gc:
+                        parts = []
+                        if uc:
+                            parts.append("## Relevant User Messages:")
+                            for i, item in enumerate(uc[:5], 1):
+                                snippet = item.get("content") or item.get("content_snippet") or ""
+                                parts.append(f"{i}. {snippet[:200]}...")
+                            parts.append("")
+                        if dc:
+                            parts.append("## Relevant Document Chunks:")
+                            for i, item in enumerate(dc[:5], 1):
+                                chunk = item.get("chunk_text", "")
+                                parts.append(f"{i}. {chunk[:200]}...")
+                            parts.append("")
+                        if gc:
+                            parts.append("## Relevant Knowledge:")
+                            for i, item in enumerate(gc[:3], 1):
+                                example = item.get("example_text", "")
+                                parts.append(f"{i}. {example[:150]}...")
+                            parts.append("")
+                        rag_context_text = "\n\n" + "\n".join(parts)
+                        print(f"📚 Built fallback RAG context: user={len(uc)} doc={len(dc)} global={len(gc)}")
+                    else:
+                        print(f"⚠️ RAG context present but empty items")
             
-            # Dossier removed - not needed for this chatbot
+            # Check for dossier context (existing story data) - Updated for client requirements
+            dossier_context = kwargs.get("dossier_context")
+            dossier_info = ""
+            if dossier_context:
+                dossier_info = "\n\nEXISTING STORY DATA (Slot-based):\n"
+                
+                # Story Frame
+                if dossier_context.get('story_timeframe') and dossier_context.get('story_timeframe') != 'Unknown':
+                    dossier_info += f"Time: {dossier_context['story_timeframe']}\n"
+                if dossier_context.get('story_location') and dossier_context.get('story_location') != 'Unknown':
+                    dossier_info += f"Location: {dossier_context['story_location']}\n"
+                if dossier_context.get('story_world_type') and dossier_context.get('story_world_type') != 'Unknown':
+                    dossier_info += f"World Type: {dossier_context['story_world_type']}\n"
+                
+                # Character (Subject)
+                if dossier_context.get('subject_full_name') and dossier_context.get('subject_full_name') != 'Unknown':
+                    dossier_info += f"Character: {dossier_context['subject_full_name']}\n"
+                if dossier_context.get('subject_relationship_to_writer') and dossier_context.get('subject_relationship_to_writer') != 'Unknown':
+                    dossier_info += f"Relationship: {dossier_context['subject_relationship_to_writer']}\n"
+                
+                # Story Craft
+                if dossier_context.get('problem_statement') and dossier_context.get('problem_statement') != 'Unknown':
+                    dossier_info += f"Problem: {dossier_context['problem_statement']}\n"
+                if dossier_context.get('actions_taken') and dossier_context.get('actions_taken') != 'Unknown':
+                    dossier_info += f"Actions: {dossier_context['actions_taken']}\n"
+                if dossier_context.get('outcome') and dossier_context.get('outcome') != 'Unknown':
+                    dossier_info += f"Outcome: {dossier_context['outcome']}\n"
+                
+                # Technical
+                if dossier_context.get('title') and dossier_context.get('title') != 'Untitled Story':
+                    dossier_info += f"Title: {dossier_context['title']}\n"
+                
+                print(f"📋 Including dossier context: {dossier_context.get('title', 'Untitled')} - {len([k for k, v in dossier_context.items() if v and v != 'Unknown'])} slots filled")
             
-            # Personal Content Strategist for Simon (fitness coach)
-            system_prompt = f"""You are Simon's Personal Content Strategist and Scriptwriter. You are his creative partner and personal assistant for content creation.
+            # Enhanced story development system prompt based on client requirements
+            system_prompt = f"""You are Ariel, a cinematic story development assistant for Stories We Tell. Your role is to help users develop compelling stories by following a structured, stateful conversation flow.
 
-        YOUR PRIMARY JOB: Help Simon create high-quality, brand-aligned content that resonates with his fitness coaching audience.
+        CORE PRINCIPLES:
+        1. FRAME-FIRST: Always collect time and location before characters
+        2. STATEFUL MEMORY: Remember all previous answers and build on them
+        3. PRONOUN RESOLUTION: Track character names and resolve pronouns (he/she = character name)
+        4. STORY COMPLETION: Recognize when story is complete and transition appropriately
+        5. PROGRESSIVE DISCLOSURE: Move from problem → actions → outcome
 
-        CRITICAL: YOU HAVE ACCESS TO SIMON'S BRAND DOCUMENTS
-        - When asked about niche, clients, audience → Use the Avatar Sheet / ICP document
-        - When creating scripts → Use Script/Storytelling documents for structure, hooks, CTAs
-        - When asked about tone/style → Use North Star / Brand Vision documents  
-        - When planning content → Use Content Strategy documents
-        - ALWAYS apply the rules, formulas, and guidelines from these documents
+        CONVERSATION STRUCTURE (Slot-based, in order):
+        1. STORY FRAME: story_timeframe → story_location → story_world_type → writer_connection_place_time
+        2. CHARACTER: subject_exists_real_world → subject_full_name → subject_relationship_to_writer → subject_brief_description
+        3. STORY CRAFT: problem_statement → actions_taken → outcome → likes_in_story
+        4. TECHNICAL: runtime (3-5 minutes) → title
+        5. COMPLETION: Recognize when story is complete
 
-        Your default voice matches Simon's brand: emotionally real, direct, human; short sentences; strong contrast; no fluff.
+        MEMORY MANAGEMENT:
+        - ALWAYS reference previous answers by name
+        - NEVER re-ask questions already answered
+        - Use character names consistently (never use pronouns without context)
+        - Show you remember: "You mentioned [character name] earlier..."
+
+        PRONOUN RESOLUTION:
+        - When user says "he" or "she", always connect to the established character name
+        - Example: "So [Character Name] faces this challenge. What does [Character Name] do to overcome it?"
+        - NEVER ask "Who is he/she?" if character name is already established
+
+        STORY COMPLETION DETECTION:
+        - Look for phrases: "at the end", "finally", "in conclusion", "that's the story", "that's my story", "story complete", "i'm done", "finished", "that's all", "the end"
+        - When story seems complete, acknowledge and move to next phase
+        - Don't keep asking questions if story is finished
+        - After story completion, suggest: "Would you like to create another story? Sign up to create unlimited stories and save your progress!"
         
-        IMPORTANT: When answering questions about brand, tone, or style, provide COMPREHENSIVE answers that fully utilize the document context. Do not give brief summaries - give detailed, complete answers that cover all relevant aspects from the documents.
-
-        CRITICAL FORMATTING RULES:
-        - Use plain text formatting only - NO markdown, NO asterisks, NO bold symbols, NO code blocks
-        - Use simple line breaks for lists and sections
-        - Use numbered lists (1., 2., 3.) or bullet points with dashes (-) instead of markdown
-        - Use ALL CAPS sparingly for emphasis only when necessary
-        - Keep formatting clean and readable - let the content speak, not formatting tricks
-        - Example: Instead of "**Question Hook**" use "Question Hook:" or "QUESTION HOOK:"
-
-        CRITICAL: USE PROVIDED DOCUMENT CONTEXT
-        - The document context below contains Simon's brand documents (Avatar Sheet, Script guides, Content strategy, etc.)
-        - When asked "Who is my niche?" or "Who are my potential clients?" → Answer DIRECTLY from the Avatar Sheet / ICP document
-        - When asked to create scripts → Use the Script/Storytelling documents for structure, hook formulas, CTA formats
-        - When asked about tone, voice, style → Reference the North Star / Brand Vision documents AND provide DETAILED, SPECIFIC answers
-        - When creating content → Apply ALL rules, formulas, and guidelines from the documents
-        - NEVER say "I don't have access to your documents" - the context below IS from Simon's documents
-        - If asked about tone/style/voice → Provide COMPREHENSIVE answers (minimum 300-500 words) with:
-          * Specific tone descriptors from documents (e.g., "Grounded, Intelligent, Emotionally honest, Calm authority")
-          * Voice rules and guidelines (e.g., "Speak directly to you", "Validate effort, never shame failure", "Keep it practical and emotional — never abstract")
-          * Signature phrases from documents (e.g., "Systems > Willpower", "Stop starting over", "Build structure, not stress", "Real food. Real life. Real results.")
-          * What to avoid (e.g., "No buzzwords: avoid 'grind,' 'discipline,' 'hustle'", "No yelling or motivational bootcamp style")
-          * Examples of how the tone appears in practice (e.g., "You're not yelling from the stage — you're sitting next to them at the table")
-          * Content modes/frameworks (e.g., Authority Mode, Relatable Mode, Disruption Mode)
-        - ALWAYS quote or reference specific details from the document context when answering
-        - For tone questions, provide a COMPLETE answer covering ALL aspects: tone descriptors, voice rules, signature phrases, what to avoid, practical examples, and content frameworks
-        - DO NOT give short, generic answers - provide comprehensive, detailed responses that fully answer the question
-        - If information isn't in the context, say "Based on your documents, I don't see specific information about [topic], but here's what I know from your brand guidelines..."
-
-        STRUCTURED OUTPUTS REQUIRED:
-
-        For Script Requests (30-60 seconds):
-        ALWAYS include ALL of these elements:
-        - Hook: Emotionally powerful, scroll-stopping first line (apply hook formulas from documents)
-        - Story/Insight: Emotional connection or relatable problem (use Simon's tone and pacing)
-        - Lesson/Takeaway: Clear value or insight
-        - CTA: Strong call to action (clear, specific, emotional - apply CTA formats from documents)
-        - Hook Options: 2-3 alternative hooks (vary them, no repetition)
-        - CTA Options: 2-3 alternative CTAs (vary them, no repetition)
-        - Caption: SEO-optimized for Simon's niche
-        - Hashtags: Based on topic + search intent for fitness coaching
-        - Thumbnail Text: 4-6 emotionally driven words
-        - B-roll Recommendations: Visual scenes supporting the story
-        - Music Style: Background sound/music suggestions
-
-        For Weekly Content Strategy:
-        - 5 ideas categorized by angle/theme (emotional, educational, motivational, myth-busting)
-        - Each idea includes: Hook idea, Main message, CTA direction, Recommended format
-        - All ideas relevant to Simon's brand, topics, and audience pain points
-
-        For Competitor Analysis:
-        - Analyze the transcript/description
-        - Extract key data and emotional triggers
-        - Rewrite in Simon's voice, tone, and storytelling style
-        - Apply Simon's content rules, pacing, and brand philosophy
-
-        For Natural Editing Commands:
-        - "Make it sound more human" → Simplify language, add conversational elements, reduce formality
-        - "Rewrite it in a more emotional tone" → Add emotional language, personal stories, vulnerability
-        - "Simplify this for Instagram" → Shorter sentences, more visual language, punchier hooks
-        - Understand and execute these contextual editing commands smoothly
-
-        CRITICAL: ACTION-ORIENTED BEHAVIOR
-        - Default to CREATING content, not asking questions
-        - Infer context from user requests, uploaded documents, and conversation history
-        - Only ask ONE clarifying question if information is ABSOLUTELY essential and cannot be inferred
-        - When a user uploads a document and asks for content, USE the document as context and CREATE immediately
-        - When the user provides even partial information, INFER the rest and CREATE content
-        - If the user has already answered questions in the conversation, REFERENCE those answers and CREATE
-
-        Conversation rules:
-        1) PRIORITIZE ACTION: Create content first, ask questions only when truly impossible to proceed
-        2) USE CONTEXT: Infer audience, goals, and details from conversation history and uploaded documents
-        3) BE DECISIVE: Make reasonable assumptions based on the request and context
-        4) If attachments/documents are provided, extract relevant information and USE IT immediately
-        5) If user pastes a transcript, infer the topic and produce the requested artifact in our voice
-        6) Keep outputs tight, scannable, and actionable; avoid generic motivational filler
-        7) Vary hooks and CTAs—no repetition across turns
-        8) Never mention prior brands or projects; this is a new client instance
+        NEW STORY REQUESTS & USER INTENT:
+        - NATURALLY detect when users want to create new stories (any variation of "I want another story", "new story", "start over", "different story")
+        - For authenticated users: "Great! Let's start a new story. What story idea is on your mind?"
+        - For anonymous users: "I'd love to help you create another story! To create unlimited stories and save your progress, please sign up. It's free and takes just a moment!"
+        - Always be proactive about suggesting signup when users express interest in multiple stories
         
-        EXAMPLES:
-        - User: "Create a story for someone who lost weight" → CREATE immediately with inferred context
-        - User uploads doc + "use this to create a story about weight loss" → Extract doc context, CREATE immediately
-        - User: "Script about consistency" → CREATE script immediately (infer audience from context if provided earlier)
+        CHARACTER CONNECTION SYNONYMS:
+        - Accept multiple terms for writer/creator relationship: "writer", "creator", "author", "screenwriter", "storyteller", "I'm just the writer", "I'm only the creator"
+        - Don't get confused by different terms - they all mean the same thing
+        - Use the term the user prefers in your responses
 
-        Output structure for /script‑style requests:
-        Script:
-        - Hook:
-        - Body (story/insight):
-        - Lesson:
-        - CTA:
-        Options:
-        - HookOptions: [..]
-        - CTAOptions: [..]
-        Distribution:
-        - Caption:
-        - Hashtags:
-        - Thumbnail:
-        - B‑roll:
-        - Music:
+        RESPONSE GUIDELINES:
+        1. Keep responses SHORT (1-2 sentences max)
+        2. Ask ONE focused question at a time
+        3. Always acknowledge what they've shared
+        4. Use character names, not pronouns
+        5. Be warm and encouraging
+        6. Follow the structured flow above
 
-        Conversation context:
+        EXAMPLES (Slot-based):
+        ❌ BAD: "What's your story about? Who are the characters?"
+        ✅ GOOD: "I'd love to hear your story! When does it take place?" (story_timeframe)
+
+        ❌ BAD: "What does he do?" (when character name is John)
+        ✅ GOOD: "What does John do to face this challenge?" (actions_taken)
+
+        ❌ BAD: Asking "Who is the main character?" when user already said "Sarah"
+        ✅ GOOD: "You mentioned Sarah earlier. What's the main problem Sarah faces?" (problem_statement)
+
+        ❌ BAD: Continuing to ask questions after user says "at the end of the story..."
+        ✅ GOOD: "That's a beautiful story about [character name]! What makes this story special to you?" (likes_in_story)
+
+        SLOT-BASED ROUTING:
+        - If story_timeframe is Unknown → Ask "When does your story take place?"
+        - If story_location is Unknown → Ask "Where does it take place?"
+        - If subject_full_name is Unknown → Ask "What's your main character's name?"
+        - If problem_statement is Unknown → Ask "What problem does [character] face?"
+        - If actions_taken is Unknown → Ask "What does [character] do to solve this?"
+        - If outcome is Unknown → Ask "How does the story end?"
+
+        ATTACHMENT ANALYSIS GUIDELINES:
+        - When the user shares images or attachments, ALWAYS provide detailed visual analysis
+        - Your analysis will be stored for future reference, so be thorough and specific
+        - Focus on all relevant visual details: appearance, expression, setting, atmosphere, mood, composition
+        - Consider the user's message as guidance - if they say "this is my character", analyze character details
+        - If they say "this is where the story takes place", focus on location/setting details
+        - Incorporate the visual details you observe naturally into your conversational response
+        - Mention specific visual elements (e.g., "I can see [character name] has [description]")
+        - Use conversation history to provide context-aware analysis (e.g., if character was mentioned before)
+        - If MULTIPLE IMAGES are present, structure your reply strictly as:
+          1) "Image 1: <filename>" — full analysis
+          2) "Image 2: <filename>" — full analysis
+          [...]
+          3) "Combined Summary" — compare/contrast and connect to story slots (character, frame, or setting)
+
+        CONVERSATION CONTEXT:
         {self._build_conversation_context(kwargs.get("conversation_history", []), kwargs.get("image_context", ""))}
 
-        Stay focused on content strategy/scriptwriting, not story‑novel crafting. Be decisive and concise.
-
-        WEB SEARCH RESULTS FORMATTING:
-        When you use web search results to answer questions, format your response in a structured, documentation-style format similar to help articles:
-        - Start with a clear heading/title for the topic
-        - Present information as a numbered list (1., 2., 3., etc.)
-        - For each source/article, include:
-          * Title/Headline
-          * Source: [domain name, e.g., "Health", "Men's Health", "CNN"]
-          * Brief description/summary of the key points
-          * Read More: [URL] (if relevant)
-        - Use clean, readable formatting with proper spacing between items
-        - End with a helpful summary or "Want to know more?" section if relevant
-        - Example format:
-          "1. Title of Article
-             Source: Health
-             Description of key points and insights from the article.
-             Read More: [URL]"
-        
-        {rag_context_text}"
-            """
+        Be Ariel - warm, story-focused, and always building on what they share.{rag_context_text}{dossier_info}"""
 
             # Build messages with conversation history for context
             messages = [{"role": "system", "content": system_prompt}]
@@ -484,7 +362,18 @@ If document context is provided above, you MUST use it. This is not optional.
             # Build user message content (ChatGPT-style content array)
             if image_data_list:
                 # ChatGPT-style: Send images directly to model
-                user_content = [{"type": "text", "text": prompt}]
+                # Preface to enumerate images and require sectioned outputs
+                filenames = [img.get("filename", "image.png") for img in image_data_list]
+                if len(filenames) > 1:
+                    listing = "\n".join([f"{i+1}) {name}" for i, name in enumerate(filenames)])
+                    preface = (
+                        "You will receive multiple images. Analyze each one in its own section and then add a Combined Summary.\n"
+                        f"Images:\n{listing}\n"
+                        "Format strictly: Image 1: <filename> … Image 2: <filename> … Combined Summary: …\n"
+                    )
+                else:
+                    preface = ""
+                user_content = [{"type": "text", "text": (preface + prompt) if preface else prompt}]
                 
                 for img_data in image_data_list:
                     image_bytes = img_data.get("data")
@@ -533,203 +422,25 @@ If document context is provided above, you MUST use it. This is not optional.
             
             print(f"🤖 [AI] Selected model: {model_name} ({'vision-capable' if image_data_list else 'text-only'})")
 
-            # Check if web search is explicitly disabled
-            enable_web_search = kwargs.get("enable_web_search")
-            if enable_web_search is False:
-                # User explicitly disabled web search
-                tools = None
-                tool_choice = None
-                print(f"🔍 [WebSearch] Web search disabled by user (globe icon off)")
-            else:
-                # Get web search function if available (enable_web_search is True or None)
-                web_search_function = self._get_web_search_function()
-                tools = [web_search_function] if web_search_function else None
-                
-                # Set tool_choice based on whether search should be forced
-                if tools:
-                    if force_search:
-                        # Force search by requiring the function to be called
-                        tool_choice = {"type": "function", "function": {"name": "internet_search"}}
-                        print(f"🔍 [WebSearch] Forcing web search due to explicit trigger")
-                    else:
-                        # Let AI decide when to search
-                        tool_choice = "auto"
-                        print(f"🔍 [WebSearch] Web search tool enabled - AI can search the internet when needed")
-                else:
-                    tool_choice = None
+            response = openai.chat.completions.create(
+                model=model_name,  # Use GPT-4o for vision, GPT-4o-mini for text-only
+                messages=messages,
+                max_completion_tokens=kwargs.get("max_tokens", 600),  # Increased for multi-image, richer context
+                temperature=0.7,
+                top_p=1.0,  # Standard value for balanced creativity
+                n=1,  # Single response
+                stream=False,  # Non-streaming for API consistency
+                presence_penalty=0.0,  # No penalty for topic repetition
+                frequency_penalty=0.0  # No penalty for word repetition
+            )
+            
+            print(f"✅ OpenAI response received: {response}")
 
-            # Prepare metadata for LangSmith tracing
-            rag_context = kwargs.get("rag_context", {})
-            rag_metadata = rag_context.get("metadata", {}) if rag_context else {}
-            trace_metadata = {
-                "task_type": "chat",
-                "model": model_name,
-                "has_images": len(image_data_list) > 0 if image_data_list else False,
-                "image_count": len(image_data_list) if image_data_list else 0,
-                "message_count": len(messages),
-                "has_rag_context": bool(rag_context),
-                "has_web_search": bool(tools),
-                "enable_web_search_flag": enable_web_search,
-                "rag_user_context_count": rag_metadata.get("user_context_count", 0) if isinstance(rag_metadata, dict) else 0,
-                "rag_document_context_count": rag_metadata.get("document_context_count", 0) if isinstance(rag_metadata, dict) else 0,
-                "rag_global_context_count": rag_metadata.get("global_context_count", 0) if isinstance(rag_metadata, dict) else 0,
-                "max_tokens": kwargs.get("max_tokens", 4000),
-                "temperature": 0.7
+            return {
+                "response": response.choices[0].message.content,
+                "model_used": model_name,
+                "tokens_used": response.usage.total_tokens if response.usage else 0
             }
-
-            # LangSmith tracing (automatic via wrapped client, but add metadata)
-            with create_trace(
-                name="generate_chat_response",
-                run_type="llm",
-                tags=["chat", "openai", "llm"],
-                metadata=trace_metadata
-            ):
-                client = self.openai_client
-                
-                # Handle function calling in a loop (max 3 iterations to avoid infinite loops)
-                max_iterations = 3
-                iteration = 0
-                final_response = None
-                
-                while iteration < max_iterations:
-                    iteration += 1
-                    
-                    # Prepare API call parameters
-                    api_params = {
-                        "model": model_name,
-                        "messages": messages,
-                        "max_completion_tokens": kwargs.get("max_tokens", 6000),  # Increased for comprehensive answers
-                        "temperature": 0.7,
-                        "top_p": 1.0,
-                        "n": 1,
-                        "stream": False,
-                        "presence_penalty": 0.0,
-                        "frequency_penalty": 0.0
-                    }
-                    
-                    # Add tools if available
-                    if tools:
-                        api_params["tools"] = tools
-                        api_params["tool_choice"] = tool_choice
-                    
-                    # Make API call
-                    if client is None:
-                        response = openai.chat.completions.create(**api_params)
-                    else:
-                        response = client.chat.completions.create(**api_params)
-                    
-                    print(f"✅ OpenAI response received (iteration {iteration}): {response}")
-                    
-                    # Check if function calling is needed
-                    message = response.choices[0].message
-                    
-                    # If no function calls, we're done
-                    if not message.tool_calls:
-                        final_response = message.content
-                        break
-                    
-                    # Handle function calls
-                    print(f"🔍 [WebSearch] Function call requested: {len(message.tool_calls)} call(s)")
-                    
-                    for tool_call in message.tool_calls:
-                        function_name = tool_call.function.name
-                        function_args = tool_call.function.arguments
-                        
-                        print(f"🔍 [WebSearch] Calling function: {function_name} with args: {function_args}")
-                        
-                        if function_name == "internet_search":
-                            import json
-                            try:
-                                args = json.loads(function_args) if isinstance(function_args, str) else function_args
-                                search_query = args.get("query", "")
-                                
-                                if search_query and web_search_service:
-                                    print(f"🔍 [WebSearch] Searching for: {search_query}")
-                                    search_results = web_search_service.search(search_query, max_results=5)
-                                    
-                                    # Format results for the model
-                                    if search_results.get("success"):
-                                        formatted_results = web_search_service.format_search_results_for_context(search_results)
-                                        print(f"🔍 [WebSearch] Found {len(search_results.get('results', []))} results")
-                                        
-                                        # Add function result to messages
-                                        messages.append({
-                                            "role": "assistant",
-                                            "content": None,
-                                            "tool_calls": [
-                                                {
-                                                    "id": tool_call.id,
-                                                    "type": "function",
-                                                    "function": {
-                                                        "name": function_name,
-                                                        "arguments": function_args
-                                                    }
-                                                }
-                                            ]
-                                        })
-                                        
-                                        messages.append({
-                                            "role": "tool",
-                                            "tool_call_id": tool_call.id,
-                                            "content": formatted_results
-                                        })
-                                    else:
-                                        error_msg = search_results.get("error", "Unknown error")
-                                        print(f"🔍 [WebSearch] Search failed: {error_msg}")
-                                        messages.append({
-                                            "role": "assistant",
-                                            "content": None,
-                                            "tool_calls": [
-                                                {
-                                                    "id": tool_call.id,
-                                                    "type": "function",
-                                                    "function": {
-                                                        "name": function_name,
-                                                        "arguments": function_args
-                                                    }
-                                                }
-                                            ]
-                                        })
-                                        messages.append({
-                                            "role": "tool",
-                                            "tool_call_id": tool_call.id,
-                                            "content": f"Search failed: {error_msg}"
-                                        })
-                                else:
-                                    print(f"🔍 [WebSearch] Search query empty or service unavailable")
-                                    messages.append({
-                                        "role": "tool",
-                                        "tool_call_id": tool_call.id,
-                                        "content": "Web search is not available"
-                                    })
-                            except Exception as e:
-                                print(f"🔍 [WebSearch] Error handling function call: {e}")
-                                messages.append({
-                                    "role": "tool",
-                                    "tool_call_id": tool_call.id,
-                                    "content": f"Error performing search: {str(e)}"
-                                })
-                        else:
-                            print(f"⚠️ [WebSearch] Unknown function: {function_name}")
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": f"Unknown function: {function_name}"
-                            })
-                    
-                    # Continue loop to get final response with search results
-                    tool_choice = None  # After first call, let model decide
-                
-                # If we exhausted iterations, use the last response
-                if final_response is None:
-                    final_response = message.content if message.content else "I apologize, but I encountered an issue processing your request."
-
-                tokens_used = response.usage.total_tokens if response.usage else 0
-                return {
-                    "response": final_response,
-                    "model_used": model_name,
-                    "tokens_used": tokens_used
-                }
         except Exception as e:
             print(f"❌ OpenAI chat error: {str(e)}")
             print(f"❌ Error type: {type(e).__name__}")
@@ -840,8 +551,8 @@ Generate a complete, production-ready video script."""
             # Use Claude Sonnet 4.5 for script generation (SOTA for structured long-form writing)
             if self.claude_available:
                 response = self.claude_client.messages.create(
-                    model="claude-sonnet-4.5",
-                    max_tokens=kwargs.get("max_tokens", 8000),  # Claude 4.5 supports up to 64K tokens out
+                    model="claude-sonnet-4-5-20250929",  # Latest Claude Sonnet 4.5 model (per Anthropic API docs)
+                    max_tokens=kwargs.get("max_tokens", 8000),  # Claude Sonnet 4.5 supports up to 64K tokens out
                     temperature=kwargs.get("temperature", 0.7),
                     messages=[
                         {"role": "user", "content": script_prompt}
@@ -850,7 +561,7 @@ Generate a complete, production-ready video script."""
 
                 return {
                     "response": response.content[0].text,
-                    "model_used": "claude-sonnet-4.5",
+                    "model_used": "claude-sonnet-4-5-20250929",
                     "tokens_used": response.usage.input_tokens + response.usage.output_tokens,
                     "script_type": "video_tutorial",
                     "estimated_duration": "3-5 minutes"
@@ -863,7 +574,7 @@ Generate a complete, production-ready video script."""
                         {"role": "system", "content": "You are a professional video scriptwriter specializing in personal storytelling and documentary-style content. Create engaging, emotionally resonant scripts that bring stories to life."},
                         {"role": "user", "content": script_prompt}
                     ],
-                    max_completion_tokens=kwargs.get("max_tokens", 6000),  # Increased for comprehensive answers
+                    max_completion_tokens=kwargs.get("max_tokens", 4000),
                     temperature=0.7,
                     top_p=1.0,
                     n=1,
@@ -907,11 +618,11 @@ Generate a complete, production-ready video script."""
                 "tokens_used": response.usage.total_tokens if response.usage else 0
             }
         except Exception as e:
-            # Fallback to Claude Sonnet 4.5 if GPT-4.1 fails
+            # Fallback to Claude Sonnet 4.5 if GPT-4o fails
             if self.claude_available:
                 try:
                     response = self.claude_client.messages.create(
-                        model="claude-sonnet-4.5",
+                        model="claude-sonnet-4-5-20250929",  # Latest Claude Sonnet 4.5 model (per Anthropic API docs)
                         max_tokens=kwargs.get("max_tokens", 3000),
                         temperature=kwargs.get("temperature", 0.8),
                         messages=[
@@ -921,7 +632,7 @@ Generate a complete, production-ready video script."""
 
                     return {
                         "response": response.content[0].text,
-                        "model_used": "claude-sonnet-4.5",
+                        "model_used": "claude-sonnet-4-5-20250929",
                         "tokens_used": response.usage.input_tokens + response.usage.output_tokens
                     }
                 except Exception as claude_error:

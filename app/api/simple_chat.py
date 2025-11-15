@@ -3,77 +3,215 @@ Simplified Chat API
 Clean chat implementation using the simplified session manager
 """
 
-# Core FastAPI imports - these should always be available
-try:
-    from fastapi import APIRouter, HTTPException, Header
-    from fastapi.responses import StreamingResponse
-except ImportError as e:
-    print(f"CRITICAL: FastAPI not available: {e}")
-    raise
-
+from fastapi import APIRouter, HTTPException, Header
+from fastapi.responses import StreamingResponse
 from typing import Optional, List, Dict
 from uuid import UUID, uuid4
 import json
 import asyncio
 import os
-import re
 from datetime import datetime, timezone
+import re
 
-# Try to import requests for image downloading
-try:
-    import requests
-except ImportError:
-    requests = None
-    print("Warning: requests library not available - image downloading will fail")
-
-# Defensive imports for app modules
-try:
-    from ..models import ChatRequest
-except Exception as e:
-    print(f"ERROR: Failed to import ChatRequest: {e}")
-    import traceback
-    traceback.print_exc()
-    # Create a minimal fallback
-    from pydantic import BaseModel
-    class ChatRequest(BaseModel):
-        text: str
-        session_id: Optional[str] = None
-        project_id: Optional[UUID] = None
-        attached_files: Optional[List[Dict]] = None
-        edit_from_message_id: Optional[str] = None
-
-try:
-    from .simple_session_manager import SimpleSessionManager
-except Exception as e:
-    print(f"ERROR: Failed to import SimpleSessionManager: {e}")
-    import traceback
-    traceback.print_exc()
-    SimpleSessionManager = None
-
-try:
-    from ..database.supabase import get_supabase_client
-except Exception as e:
-    print(f"ERROR: Failed to import get_supabase_client: {e}")
-    import traceback
-    traceback.print_exc()
-    def get_supabase_client():
-        return None
+from ..models import ChatRequest, DossierUpdate
+from .simple_session_manager import SimpleSessionManager
+from ..database.supabase import get_supabase_client
 
 # Try to import AI components
 try:
     from ..ai.models import ai_manager, TaskType
     from ..ai.rag_service import rag_service
+    from ..ai.dossier_extractor import dossier_extractor
     AI_AVAILABLE = True
 except Exception as e:
     print(f"Warning: AI components not available: {e}")
-    import traceback
-    traceback.print_exc()
     AI_AVAILABLE = False
     ai_manager = None
     TaskType = None
     rag_service = None
+    dossier_extractor = None
 
 router = APIRouter()
+
+# Placeholder event sender (no-op). Replace with real SSE/bus if needed.
+async def send_event(_event: dict) -> None:
+    return
+
+def _is_story_completion_text(text: str) -> bool:
+    """Heuristic to detect completion based on assistant text."""
+    if not text:
+        return False
+    normalized = text.lower()
+    completion_markers = [
+        "the story is complete",
+        "your story is complete",
+        "story is complete",
+        "story complete",
+        "we've reached the end",
+        "the end of the story",
+        "conclusion of the story",
+        "would you like to create another story",  # Matches: "Would you like to create another story?"
+        "would you like to start another story",
+        "would you like to begin another story",
+        "new story",
+        "start a new story",
+        "create another story",
+        "sign up to create unlimited",  # Matches: "Sign up to create unlimited stories..."
+        "create unlimited stories",  # Additional variant
+    ]
+    result = any(marker in normalized for marker in completion_markers)
+    if result:
+        print(f"🎯 [COMPLETION] Detected completion marker in: {text[:200]}...")
+    return result
+
+async def _generate_conversation_transcript(conversation_history: List[Dict]) -> str:
+    """Generate a formatted conversation transcript from chat history."""
+    try:
+        transcript_lines = ["# Conversation Transcript", ""]
+        
+        for i, message in enumerate(conversation_history):
+            role = message.get("role", "unknown")
+            content = message.get("content", "")
+            timestamp = message.get("timestamp", "")
+            
+            # Format role
+            if role == "user":
+                speaker = "Client"
+            elif role == "assistant":
+                speaker = "Stories We Tell AI"
+            else:
+                speaker = role.title()
+            
+            # Add message to transcript
+            transcript_lines.append(f"## {speaker}")
+            if timestamp:
+                transcript_lines.append(f"*{timestamp}*")
+            transcript_lines.append("")
+            transcript_lines.append(content)
+            transcript_lines.append("")
+            transcript_lines.append("---")
+            transcript_lines.append("")
+        
+        return "\n".join(transcript_lines)
+    except Exception as e:
+        print(f"⚠️ Transcript generation failed: {e}")
+        return f"Transcript generation failed: {str(e)}"
+
+
+async def _queue_for_validation(
+    user_email: Optional[str],
+    user_name: Optional[str],
+    project_id: str,
+    dossier_snapshot: Optional[dict],
+    conversation_transcript: str,
+    generated_script: str,
+    session_id: str,
+    user_id: str,
+) -> None:
+    """Queue story completion for human validation before client delivery."""
+    try:
+        print(f"📋 [VALIDATION] Starting validation queue process...")
+        print(f"📋 [VALIDATION] Project ID: {project_id}")
+        print(f"📋 [VALIDATION] User ID: {user_id}")
+        print(f"📋 [VALIDATION] Session ID: {session_id}")
+        print(f"📋 [VALIDATION] User Email: {user_email}")
+        print(f"📋 [VALIDATION] Transcript length: {len(conversation_transcript)} chars")
+        print(f"📋 [VALIDATION] Script length: {len(generated_script)} chars")
+        
+        from ..services.email_service import EmailService  # type: ignore
+        from ..services.validation_service import validation_service  # type: ignore
+        
+        # Store validation request in database
+        print(f"📋 [VALIDATION] Creating validation request in database...")
+        validation_request = await validation_service.create_validation_request(
+            project_id=UUID(project_id),
+            user_id=UUID(user_id),
+            session_id=UUID(session_id),
+            conversation_transcript=conversation_transcript,
+            generated_script=generated_script,
+            client_email=user_email,
+            client_name=user_name
+        )
+        
+        if not validation_request:
+            print("⚠️ [VALIDATION] Failed to create validation request in database - falling back to direct client email")
+            await _send_completion_email(user_email, user_name, project_id, dossier_snapshot, generated_script)
+            return
+        
+        validation_id = validation_request['validation_id']
+        print(f"✅ [VALIDATION] Validation request created in database: {validation_id}")
+        
+        # Send email notification to internal team
+        service = EmailService()
+        if not service.available:
+            print("⚠️ EmailService unavailable - validation stored in database but no email sent")
+            return
+        
+        # Get internal team emails from environment
+        internal_emails_str = os.getenv("CLIENT_EMAIL", "team@storiesweetell.com")
+        internal_emails = [email.strip() for email in internal_emails_str.split(",") if email.strip()]
+        print(f"📧 Sending validation notification to internal team: {internal_emails}")
+        
+        story_data = dossier_snapshot or {}
+        
+        # Send to internal team for validation
+        ok = await service.send_validation_request(
+            internal_emails=internal_emails,
+            project_id=project_id,
+            story_data=story_data,
+            transcript=conversation_transcript,
+            generated_script=generated_script,
+            client_email=user_email,
+            client_name=user_name or "Anonymous",
+            validation_id=validation_id
+        )
+        
+        if ok:
+            print("📧 Validation notification sent to internal team")
+            # Update status to indicate email was sent
+            await validation_service.update_validation_status(
+                validation_id=UUID(validation_id),
+                status='pending'  # Keep as pending but note email sent
+            )
+        else:
+            print("⚠️ Validation notification failed but request is stored in database")
+            
+    except Exception as e:
+        print(f"⚠️ Validation queue failed: {e}")
+        print("🔄 Falling back to direct client email")
+        await _send_completion_email(user_email, user_name, project_id, dossier_snapshot, generated_script)
+
+
+async def _send_completion_email(
+    user_email: Optional[str],
+    user_name: Optional[str],
+    project_id: str,
+    dossier_snapshot: Optional[dict],
+    generated_script: str
+) -> None:
+    """Send a completion email via existing EmailService (Resend-backed)."""
+    try:
+        from ..services.email_service import EmailService  # type: ignore
+        service = EmailService()
+        if not service.available:
+            print("⚠️ EmailService unavailable - skipping completion email")
+            return
+        if not user_email:
+            print("⚠️ Missing user_email - skipping completion email")
+            return
+        story_data = dossier_snapshot or {}
+        ok = await service.send_story_captured_email(
+            user_email=user_email,
+            user_name=user_name or "Writer",
+            story_data=story_data,
+            generated_script=generated_script or "",
+            project_id=project_id,
+            client_emails=None,
+        )
+        if ok:
+            print("📧 Completion email sent via EmailService")
+    except Exception as e:
+        print(f"⚠️ Failed to send completion email: {e}")
 
 @router.post("/chat")
 async def chat(
@@ -92,22 +230,6 @@ async def chat(
     4. Save AI response to database
     5. Stream response back to user
     """
-    
-    # Early check for critical dependencies
-    if SimpleSessionManager is None:
-        raise HTTPException(status_code=500, detail="Session manager not available - check server logs")
-    
-    # CRITICAL: Log the raw request data immediately
-    print(f"🔵 [CHAT] Received chat request")
-    print(f"🔵 [CHAT] Text: {chat_request.text[:100]}...")
-    print(f"🔵 [CHAT] Has attached_files: {bool(chat_request.attached_files)}")
-    if chat_request.attached_files:
-        print(f"🔵 [CHAT] Number of attached files: {len(chat_request.attached_files)}")
-        for i, f in enumerate(chat_request.attached_files):
-            print(f"🔵 [CHAT] File {i+1} raw data: {list(f.keys())}")
-            print(f"🔵 [CHAT] File {i+1} extracted_text present: {'extracted_text' in f}")
-            if 'extracted_text' in f:
-                print(f"🔵 [CHAT] File {i+1} extracted_text length: {len(f.get('extracted_text', ''))}")
     
     try:
         # Get or create session
@@ -162,80 +284,54 @@ async def chat(
                 print(traceback.format_exc())
                 # Continue with creating new message even if deletion fails
         
-        # Save user message (non-blocking - don't wait if it's slow)
-        user_message_id = None
-        try:
-            user_message_id = await _save_message(
-                session_id=str(session_id),
-                user_id=str(user_id),
-                role="user",
-                content=chat_request.text,
-                metadata={
-                    "is_authenticated": is_authenticated,
-                    "attached_files": chat_request.attached_files or []
-                }
-            )
-        except Exception as e:
-            print(f"[WARNING] Failed to save user message: {e}")
+        # Save user message
+        user_message_id = await _save_message(
+            session_id=str(session_id),
+            user_id=str(user_id),
+            role="user",
+            content=chat_request.text,
+            metadata={
+                "is_authenticated": is_authenticated,
+                "attached_files": chat_request.attached_files or []
+            }
+        )
         
-        # Store user message embedding for RAG (non-blocking - fire and forget)
+        # Store user message embedding for RAG
         if rag_service and user_message_id:
-            # Run in background - don't block the response
-            async def store_embedding_background():
-                try:
-                    rag_user_id = UUID("00000000-0000-0000-0000-000000000001")
-                    await rag_service.embed_and_store_message(
-                        message_id=UUID(user_message_id),
-                        user_id=rag_user_id,
-                        project_id=UUID(project_id) if project_id else None,
-                        session_id=UUID(session_id),
-                        content=chat_request.text,
-                        role="user",
-                        metadata={"is_authenticated": is_authenticated, "original_user_id": str(user_id), "session_id": str(session_id)}
-                    )
-                except Exception as e:
-                    print(f"[WARNING] Failed to store embedding: {e}")
-            
-            # Don't await - let it run in background
-            asyncio.create_task(store_embedding_background())
-        
-        # Get conversation history (with very short timeout to avoid blocking)
-        # CRITICAL: Skip conversation history when document is present to save time
-        conversation_history = []
-        
-        # Check if document is present - if so, skip history to save time
-        has_document = False
-        if chat_request.attached_files:
-            for f in chat_request.attached_files:
-                if f.get("extracted_text") and len(f.get("extracted_text", "")) > 0:
-                    has_document = True
-                    break
-        
-        if not has_document:
-            # Only fetch history if no document (documents provide their own context)
             try:
-                conversation_history = await asyncio.wait_for(
-                    _get_conversation_history(str(session_id), str(user_id), limit=10),  # Restored to 10 messages
-                    timeout=1.0  # Max 1 second for history
+                if is_authenticated:
+                    # For authenticated users, use their actual user_id
+                    rag_user_id = UUID(user_id)
+                    print(f"📚 Using RAG user_id: {rag_user_id} (authenticated: {is_authenticated})")
+                else:
+                    # For anonymous users, use the special anonymous user ID
+                    # This allows RAG to work while maintaining session isolation
+                    rag_user_id = UUID("00000000-0000-0000-0000-000000000000")
+                    print(f"📚 Using anonymous user_id for RAG: {rag_user_id} (session: {session_id})")
+                
+                await rag_service.embed_and_store_message(
+                    message_id=UUID(user_message_id),
+                    user_id=rag_user_id,
+                    project_id=UUID(project_id) if project_id else None,
+                    session_id=UUID(session_id),
+                    content=chat_request.text,
+                    role="user",
+                    metadata={"is_authenticated": is_authenticated, "original_user_id": str(user_id), "session_id": str(session_id)}
                 )
-            except asyncio.TimeoutError:
-                print("[WARNING] Conversation history fetch timed out - continuing without it")
-                conversation_history = []  # Use empty history if timeout
+                print(f"📚 Stored user message embedding: {user_message_id}")
             except Exception as e:
-                print(f"[WARNING] Failed to get conversation history: {e}")
-                conversation_history = []  # Use empty history on error
-        else:
-            print("[INFO] Skipping conversation history - document provides context")
+                print(f"⚠️ Failed to store user message embedding: {e}")
+        
+        # Get conversation history for context (moved outside generate_stream to fix scope issue)
+        # Fetch last 50 messages for RAG context (good balance between context and performance)
+        conversation_history = await _get_conversation_history(str(session_id), str(user_id), limit=50)
         
         # Process attached image files for DIRECT sending to model (ChatGPT-style)
         image_data_list = []  # List of {"data": bytes, "mime_type": str, "filename": str}
         
         if chat_request.attached_files:
-            print(f"📎 [FILES] Processing {len(chat_request.attached_files)} attached files")
-            print(f"📎 [FILES] Attached files details:")
-            for f in chat_request.attached_files:
-                extracted_text = f.get('extracted_text')
-                print(f"  - Name: {f.get('name')}, Type: {f.get('type')}, URL: {f.get('url', 'NO URL')[:80]}, Asset ID: {f.get('asset_id', 'NO ASSET ID')}, Has extracted_text: {bool(extracted_text)}, Length: {len(extracted_text) if extracted_text else 0}")
+            print(f"🖼️ [IMAGE] Processing {len(chat_request.attached_files)} attached files for direct model sending")
+            print(f"🖼️ [IMAGE] Attached files: {[{'name': f.get('name'), 'type': f.get('type'), 'url': f.get('url')[:50] + '...' if f.get('url') else None} for f in chat_request.attached_files]}")
             
             import requests
             
@@ -243,10 +339,8 @@ async def chat(
                 file_type = attached_file.get("type", "unknown")
                 file_name = attached_file.get("name", "unknown")
                 file_url = attached_file.get("url", "")
-                asset_id = attached_file.get("asset_id", "")
                 
-                print(f"📎 [FILES] Processing file {idx + 1}/{len(chat_request.attached_files)}: {file_name}")
-                print(f"  Type: {file_type}, URL: {file_url[:100] if file_url else 'NO URL'}, Asset ID: {asset_id}")
+                print(f"🖼️ [IMAGE] Processing file {idx + 1}/{len(chat_request.attached_files)}: {file_name} (type: {file_type})")
                 
                 # Check if it's an image file
                 is_image = (
@@ -255,108 +349,11 @@ async def chat(
                     file_name.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp'))
                 )
                 
-                # Check if it's a PDF/document file (check this BEFORE image check for PDFs)
-                is_pdf = (
-                    file_type in ['document', 'script'] or
-                    file_name.lower().endswith(('.pdf', '.docx', '.doc', '.txt'))
-                )
-                
-                # Handle PDF/document files FIRST (before images)
-                if is_pdf:
-                    print(f"📄 [DOCUMENT] Detected document file: {file_name} (type: {file_type})")
-                    extracted_text = None
-                    
-                    # FIRST: Check if extracted_text is already in the attached_file (from upload endpoint)
-                    extracted_text_from_upload = attached_file.get("extracted_text")
-                    print(f"🔍 [DOCUMENT] Checking for extracted_text in attached_file: {bool(extracted_text_from_upload)}")
-                    if extracted_text_from_upload:
-                        extracted_text = extracted_text_from_upload
-                        print(f"✅ [DOCUMENT] Using pre-extracted text from upload ({len(extracted_text)} chars)")
-                        print(f"✅ [DOCUMENT] First 200 chars: {extracted_text[:200]}")
-                    else:
-                        print(f"⚠️ [DOCUMENT] No extracted_text in attached_file - will try to download and extract")
-                        print(f"⚠️ [DOCUMENT] File URL: {file_url[:100] if file_url else 'NO URL'}")
-                    
-                    # SECOND: If not available, try to download from URL (only if URL is valid and not local://)
-                    if not extracted_text and file_url and file_url.strip() and not file_url.startswith("local://"):
-                        try:
-                            if not requests:
-                                raise ImportError("requests library not available")
-                            print(f"📄 [DOCUMENT] Attempting to download from URL: {file_url[:100]}...")
-                            response = requests.get(file_url, timeout=30)
-                            
-                            if response.status_code == 200:
-                                document_bytes = response.content
-                                print(f"📄 [DOCUMENT] Downloaded {len(document_bytes)} bytes")
-                                try:
-                                    # Extract text from document
-                                    from app.ai.document_processor import document_processor
-                                    
-                                    # Check if document_processor is available
-                                    if document_processor is None:
-                                        print(f"❌ [DOCUMENT] document_processor not available")
-                                        raise Exception("Document processor not available")
-                                    
-                                    extracted_text = await document_processor._extract_text(
-                                        document_bytes,
-                                        file_name,
-                                        file_type if file_type.startswith("application/") else "application/pdf"
-                                    )
-                                    
-                                    # Check if extraction returned an error message (dependencies missing)
-                                    if extracted_text and ("not available" in extracted_text.lower() or "not installed" in extracted_text.lower()):
-                                        print(f"❌ [DOCUMENT] Dependencies missing: {extracted_text}")
-                                        extracted_text = None
-                                    elif extracted_text and extracted_text.strip():
-                                        print(f"✅ [DOCUMENT] Extracted {len(extracted_text)} chars from downloaded file")
-                                    else:
-                                        print(f"⚠️ [DOCUMENT] Extraction returned empty text")
-                                        extracted_text = None
-                                except ImportError as import_error:
-                                    print(f"❌ [DOCUMENT] Import error: {import_error}")
-                                    print(f"❌ [DOCUMENT] PyPDF2 or python-docx may not be installed")
-                                    extracted_text = None
-                                except Exception as e:
-                                    print(f"❌ [DOCUMENT] Error extracting text: {e}")
-                                    import traceback
-                                    print(traceback.format_exc())
-                                    extracted_text = None
-                            else:
-                                print(f"⚠️ [DOCUMENT] Failed to download from URL (status {response.status_code})")
-                        except Exception as e:
-                            print(f"⚠️ [DOCUMENT] Error downloading from URL: {e}")
-                    
-                    # Add extracted text to prompt if we have it
-                    if extracted_text and extracted_text.strip():
-                        # Limit to 3000 chars - reasonable size for document processing
-                        document_text_preview = extracted_text[:3000]
-                        if len(extracted_text) > 3000:
-                            document_text_preview += f"\n\n[Note: Document continues. Total: {len(extracted_text)} chars. Summarize key points from above.]"
-                        
-                        # CRITICAL: Add clear instructions for the AI to use this document content
-                        document_context_text = f"\n\n## IMPORTANT: USER HAS UPLOADED A DOCUMENT\n\n### Document Name: {file_name}\n\n### Document Content:\n{document_text_preview}\n\n### Instructions:\nThe user is asking about the contents of this document. You MUST analyze and summarize the document content above. Do NOT say you cannot process documents or that you didn't receive a proper response. The document content is provided above - use it to answer the user's question.\n"
-                        chat_request.text = chat_request.text + document_context_text
-                        print(f"✅ [DOCUMENT] Added {len(extracted_text)} chars from {file_name} to prompt (showing first {len(document_text_preview)} chars)")
-                        print(f"✅ [DOCUMENT] Full prompt length after adding document: {len(chat_request.text)} chars")
-                        print(f"✅ [DOCUMENT] Prompt preview (last 500 chars): {chat_request.text[-500:]}")
-                    else:
-                        print(f"⚠️ [DOCUMENT] No text available for {file_name} - extraction may have failed")
-                        print(f"⚠️ [DOCUMENT] extracted_text value: {extracted_text}")
-                        print(f"⚠️ [DOCUMENT] extracted_text type: {type(extracted_text)}")
-                        print(f"⚠️ [DOCUMENT] extracted_text is None: {extracted_text is None}")
-                        print(f"⚠️ [DOCUMENT] extracted_text is empty string: {extracted_text == ''}")
-                        # Still add a note so AI knows about the document
-                        document_note = f"\n\n## NOTE: User has attached a document file named '{file_name}'. The document content could not be extracted automatically. Please ask the user to provide key points or information from the document if needed."
-                        chat_request.text = chat_request.text + document_note
-                        print(f"⚠️ [DOCUMENT] Added document note to prompt (no extracted text)")
-                # Then handle images
-                elif is_image:
+                if is_image:
                     print(f"🖼️ [IMAGE] Detected image file: {file_name}")
                     print(f"🖼️ [IMAGE] Image URL: {file_url[:100]}...")
                     
                     try:
-                        if not requests:
-                            raise ImportError("requests library not available")
                         print(f"🖼️ [IMAGE] Downloading image from URL...")
                         response = requests.get(file_url, timeout=30)
                         
@@ -391,7 +388,7 @@ async def chat(
                         print(f"❌ [IMAGE] Error downloading image {file_name}: {str(e)}")
                         print(f"❌ [IMAGE] Traceback: {traceback.format_exc()}")
                 else:
-                    print(f"⏭️ [FILES] Skipping unsupported file: {file_name} (type: {file_type})")
+                    print(f"⏭️ [IMAGE] Skipping non-image file: {file_name} (type: {file_type})")
             
             print(f"🖼️ [IMAGE] Prepared {len(image_data_list)} image(s) for direct model sending")
         else:
@@ -440,130 +437,56 @@ async def chat(
         
         # Generate and stream AI response
         async def generate_stream():
-            # LangSmith: Create parent trace for entire chat flow (RAG + LLM)
             try:
-                from app.ai.langsmith_config import create_trace, is_langsmith_enabled
-                langsmith_enabled = is_langsmith_enabled()
-            except:
-                langsmith_enabled = False
-                create_trace = lambda *args, **kwargs: __import__('contextlib').nullcontext()
-            
-            # Parent trace wraps entire chat generation (RAG + LLM)
-            with create_trace(
-                name="chat_generation",
-                run_type="chain",
-                tags=["chat", "rag", "llm"],
-                metadata={
-                    "user_id": str(user_id) if user_id else None,
-                    "session_id": str(session_id) if session_id else None,
-                    "project_id": str(project_id) if project_id else None,
-                    "message_length": len(chat_request.text) if chat_request.text else 0,
-                    "enable_web_search": chat_request.enable_web_search or False
-                }
-            ) if langsmith_enabled else __import__('contextlib').nullcontext():
-                try:
-                    # Send "thinking" message immediately to start streaming
-                    thinking_chunk = {
-                        "type": "thinking",
-                        "content": "Thinking..."
-                    }
-                    yield f"data: {json.dumps(thinking_chunk)}\n\n"
-                    
-                    # Generate AI response
-                    if AI_AVAILABLE and ai_manager:
-                        # Check if document text was already added to the prompt BEFORE any heavy operations
-                        # If document is already in prompt, skip RAG to avoid timeout
-                        has_document_context = (
-                            "## IMPORTANT: USER HAS UPLOADED A DOCUMENT" in chat_request.text or
-                            "## CONTENT FROM UPLOADED DOCUMENT" in chat_request.text or
-                            "Document Content:" in chat_request.text
-                        )
-                    
-                    # Dossier removed - not needed for this chatbot
-                    
-                    # Get RAG context from uploaded documents (with timeout to avoid blocking)
-                    # CRITICAL: Skip RAG for simple queries to prevent timeout
-                    # Only use RAG for complex queries that might benefit from document context
-                    rag_context = None
-                    
-                    # CRITICAL FIX: Always use RAG for document-based queries
-                    # The client needs the bot to recognize document information (e.g., "Who is my niche?")
-                    # RAG should run for ALL queries to ensure document context is available
-                    query_text = (chat_request.text or "").strip()
-                    
-                    # Always use RAG if available - don't skip based on query length or history
-                    # Documents are the core feature - we need RAG to work for all queries
-                    should_use_rag = (
-                        rag_service and 
-                        not has_document_context  # Skip RAG only if document is already in prompt
-                    )
-                    
-                    if should_use_rag:
+                # Generate AI response
+                if AI_AVAILABLE and ai_manager:
+                    # Get or create dossier for this project
+                    dossier_context = None
+                    if dossier_extractor and project_id:
                         try:
-                            rag_user_id = UUID("00000000-0000-0000-0000-000000000001")
-                            print(f"[RAG] Getting RAG context for query: '{query_text[:50]}...'")
-                            
-                            # Increased timeout to 5 seconds - RAG is critical for document queries
-                            # Client needs reliable document retrieval for brand questions
-                            # Document retrieval can take time with 384 embeddings
-                            rag_context = await asyncio.wait_for(
-                                rag_service.get_rag_context(
-                                    user_message=chat_request.text,
-                                    user_id=rag_user_id,
-                                    project_id=None,
-                                    session_id=UUID(session_id),  # NEW: Pass session_id for chat isolation
-                                    conversation_history=conversation_history
-                                ),
-                                timeout=5.0  # Increased to 5s to allow document retrieval to complete
-                            )
-                            # Get counts from metadata (they're nested there)
-                            metadata = rag_context.get('metadata', {})
-                            user_count = metadata.get('user_context_count', 0) if isinstance(metadata, dict) else 0
-                            doc_count = metadata.get('document_context_count', 0) if isinstance(metadata, dict) else 0
-                            global_count = metadata.get('global_context_count', 0) if isinstance(metadata, dict) else 0
-                            
-                            print(f"[RAG] ✅ Context retrieved: {user_count} messages, {doc_count} document chunks, {global_count} global patterns")
-                            
-                            # Log document context details for debugging
-                            if doc_count > 0:
-                                print(f"[RAG] ✅ Found {doc_count} document chunks - AI will use this!")
-                                doc_context = rag_context.get('document_context', [])
-                                if doc_context:
-                                    for i, chunk in enumerate(doc_context[:3], 1):
-                                        chunk_text = chunk.get('chunk_text', '') if isinstance(chunk, dict) else str(chunk)[:100]
-                                        print(f"[RAG]   Chunk {i}: {chunk_text[:100]}...")
-                                else:
-                                    print(f"[RAG] ⚠️ Warning: doc_count={doc_count} but document_context list is empty!")
+                            from ..database.session_service_supabase import session_service
+                            # Get existing dossier
+                            dossier = session_service.get_dossier(UUID(project_id), UUID(user_id))
+                            if dossier and dossier.snapshot_json:
+                                dossier_context = dossier.snapshot_json
+                                print(f"📋 Using existing dossier: {dossier.title}")
                             else:
-                                print(f"[RAG] ⚠️ No document chunks found - check if documents are properly ingested")
-                        except asyncio.TimeoutError:
-                            print("[RAG] ⚠️ Timeout after 5s - continuing without RAG context")
-                            rag_context = None
+                                print(f"📋 No existing dossier found for project {project_id}")
                         except Exception as e:
-                            print(f"[RAG] ❌ Error - skipping RAG: {e}")
-                            import traceback
-                            print(traceback.format_exc())
+                            print(f"⚠️ Dossier retrieval error: {e}")
+                    
+                    # Get RAG context from uploaded documents
+                    # IMPORTANT: Use project_id to limit search to current project only
+                    # Each project = separate story with isolated context
+                    # Stories should be isolated - no cross-project character references
+                    rag_context = None
+                    if rag_service:
+                        try:
+                            if is_authenticated:
+                                # For authenticated users, use their actual user_id
+                                rag_user_id = UUID(user_id)
+                                print(f"🔍 Getting RAG context for user: {rag_user_id}, project: {project_id} (project-level isolation)")
+                            else:
+                                # For anonymous users, use the special anonymous user ID
+                                rag_user_id = UUID("00000000-0000-0000-0000-000000000000")
+                                print(f"🔍 Getting RAG context for anonymous user: {rag_user_id}, project: {project_id} (project-level isolation)")
+                            
+                            # Pass project_id to limit search to current project only
+                            # This ensures each story/project is isolated and independent
+                            rag_context = await rag_service.get_rag_context(
+                                user_message=chat_request.text,
+                                user_id=rag_user_id,
+                                project_id=UUID(project_id) if project_id else None,  # Limit to current project
+                                conversation_history=conversation_history
+                            )
+                            print(f"📚 RAG context retrieved: {rag_context.get('user_context_count', 0)} user messages, {rag_context.get('document_context_count', 0)} document chunks")
+                        except Exception as e:
+                            print(f"⚠️ RAG context error: {e}")
                             rag_context = None
-                    else:
-                        if has_document_context:
-                            print(f"[RAG] Skipping RAG - document content already in prompt")
-                        else:
-                            print(f"[RAG] ⚠️ RAG service not available")
                     
-                    # Enhance user prompt - include document context and image guidance
-                    # Model will see images + conversation history + RAG context + document text in single call
+                    # Enhance user prompt when images are present to ensure detailed analysis
+                    # Model will see images + conversation history + RAG context in single call
                     enhanced_prompt = chat_request.text
-                    
-                    # Add guidance for document analysis if document is present
-                    if has_document_context and not image_data_list:
-                        print(f"📄 [PROMPT] Document detected in prompt - adding analysis guidance")
-                        # Document only - ensure AI analyzes it
-                        if enhanced_prompt and not enhanced_prompt.strip().startswith("##"):
-                            # User provided question - AI should answer based on document
-                            enhanced_prompt = f"{enhanced_prompt}\n\n[Note: Please analyze the attached document content and provide a comprehensive answer based on the document's main points and key information.]"
-                        elif "## IMPORTANT: USER HAS UPLOADED A DOCUMENT" in enhanced_prompt or "## CONTENT FROM UPLOADED DOCUMENT" in enhanced_prompt:
-                            # Document text is included - AI should analyze it
-                            enhanced_prompt = f"{enhanced_prompt}\n\n[Note: Please provide a detailed analysis of the document content, summarizing the main points and key information.]"
                     
                     if image_data_list:
                         # Add guidance to ensure detailed visual analysis while staying conversational
@@ -575,389 +498,386 @@ async def chat(
                             enhanced_prompt = "Please analyze the attached image(s) in detail and provide comprehensive information about all visual elements relevant to storytelling and story development."
                     
                     print(f"📝 [PROMPT] Enhanced prompt (length: {len(enhanced_prompt)} chars)")
-                    print(f"📝 [PROMPT] Prompt preview (first 500 chars): {enhanced_prompt[:500]}")
-                    print(f"📝 [PROMPT] Prompt preview (last 500 chars): {enhanced_prompt[-500:]}")
-                    if has_document_context:
-                        print(f"📄 [PROMPT] Document content included in prompt")
                     if image_data_list:
                         print(f"🖼️ [PROMPT] Images included in single model call with full context")
                     
-                    print(f"🤖 [AI] Calling AI manager with enhanced prompt...")
-                    print(f"🤖 [AI] Conversation history length: {len(conversation_history)} messages")
-                    print(f"🤖 [AI] RAG context: {bool(rag_context)}")
-                    print(f"🤖 [AI] Image data: {len(image_data_list)} images")
+                    # Use AI manager for response generation with RAG and dossier context
+                    # SINGLE CALL: Images + conversation history + RAG context all together
+                    ai_response = await ai_manager.generate_response(
+                        task_type=TaskType.CHAT,
+                        prompt=enhanced_prompt,
+                        conversation_history=conversation_history,  # Full conversation history
+                        user_id=user_id,
+                        project_id=project_id,
+                        rag_context=rag_context,  # RAG context from documents
+                        dossier_context=dossier_context,
+                        image_data=image_data_list  # Images sent directly (ChatGPT-style)
+                    )
                     
-                    # Use AI manager for response generation with RAG context
-                    # CRITICAL: Use asyncio.wait_for with proper cancellation to prevent timeout
-                    # Also reduce max_tokens and add aggressive timeout
-                    try:
-                        # Create a task that can be cancelled
-                        ai_task = asyncio.create_task(
-                            ai_manager.generate_response(
-                                task_type=TaskType.CHAT,
-                                prompt=enhanced_prompt,
-                                conversation_history=conversation_history,
-                                user_id=user_id,
-                                project_id=project_id,
-                                rag_context=rag_context,
-                                image_data=image_data_list,
-                                max_tokens=2000,  # Restored to reasonable value for proper responses
-                                enable_web_search=chat_request.enable_web_search
-                            )
-                        )
-                        
-                        # Wait with timeout and proper cancellation
-                        # Use longer timeout for non-document queries (they're usually faster)
-                        timeout_seconds = 8.0 if has_document_context else 8.5  # 8s for docs, 8.5s for simple queries
-                        ai_response = await asyncio.wait_for(ai_task, timeout=timeout_seconds)
-                        print(f"🤖 [AI] AI manager returned response")
-                        print(f"🤖 [AI] Response keys: {list(ai_response.keys()) if isinstance(ai_response, dict) else 'Not a dict'}")
-                    except asyncio.TimeoutError:
-                        timeout_used = 8.0 if has_document_context else 8.5
-                        print(f"❌ [AI] AI generation timed out after {timeout_used} seconds - cancelling and using fallback")
-                        # Cancel the task if it's still running
-                        if not ai_task.done():
-                            ai_task.cancel()
-                            try:
-                                await ai_task
-                            except asyncio.CancelledError:
-                                pass
-                        # Provide a helpful fallback response instead of empty
-                        if has_document_context:
-                            ai_response = {
-                                "response": "I'm processing your request, but it's taking longer than expected. The document content is being analyzed. Please try asking a more specific question or try again in a moment.",
-                                "model_used": "timeout_fallback"
-                            }
-                        else:
-                            ai_response = {
-                                "response": "I'm processing your request, but it's taking longer than expected. Please try again in a moment or rephrase your question.",
-                                "model_used": "timeout_fallback"
-                            }
-                    except Exception as ai_error:
-                        print(f"❌ [AI] Error calling AI manager: {ai_error}")
-                        import traceback
-                        print(f"❌ [AI] Traceback: {traceback.format_exc()}")
-                        # Use fallback instead of raising to prevent complete failure
-                        ai_response = {
-                            "response": "I encountered an error processing your request. Please try again.",
-                            "model_used": "error_fallback"
-                        }
+                    # Get the response content
+                    full_response = ai_response.get("response", "I'm sorry, I couldn't generate a response.")
                     
-                    # Get the response content and clean markdown formatting
-                    full_response = ai_response.get("response", "")
-                    
-                    print(f"✅ [CHAT] AI response received: {len(full_response) if full_response else 0} chars")
-                    print(f"✅ [CHAT] AI response type: {type(full_response)}")
-                    print(f"✅ [CHAT] AI response keys: {list(ai_response.keys()) if isinstance(ai_response, dict) else 'Not a dict'}")
-                    if full_response:
-                        print(f"✅ [CHAT] Response preview (first 200 chars): {full_response[:200]}")
-                    else:
-                        print(f"⚠️ [CHAT] Response is empty or None!")
-                    
-                    # CRITICAL: Ensure we have a response - never send empty
-                    if not full_response or not full_response.strip():
-                        print("[CHAT] CRITICAL WARNING: Empty response from AI, using fallback")
-                        full_response = "I'm processing your request. Please try again if this message appears, or rephrase your question."
-                    
-                    # Clean markdown formatting: remove asterisks, bold symbols, etc.
-                    # (re is imported at top of file)
-                    # Remove bold markdown (**text** or __text__)
-                    full_response = re.sub(r'\*\*(.*?)\*\*', r'\1', full_response)
-                    full_response = re.sub(r'__(.*?)__', r'\1', full_response)
-                    # Remove italic markdown (*text* or _text_)
-                    full_response = re.sub(r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)', r'\1', full_response)
-                    full_response = re.sub(r'(?<!_)_(?!_)(.*?)(?<!_)_(?!_)', r'\1', full_response)
-                    # Remove code blocks (```code```)
-                    full_response = re.sub(r'```[\w]*\n?(.*?)```', r'\1', full_response, flags=re.DOTALL)
-                    # Remove inline code (`code`)
-                    full_response = re.sub(r'`([^`]+)`', r'\1', full_response)
-                    # Clean up multiple spaces
-                    full_response = re.sub(r'  +', ' ', full_response)
-                    # Clean up multiple newlines
-                    full_response = re.sub(r'\n\n\n+', '\n\n', full_response)
-                    
-                    print(f"[CHAT] Response after cleaning: {len(full_response)} chars")
-                    
-                    # Send session metadata first (so frontend can store it)
-                    metadata_chunk = {
-                        "type": "metadata",
-                        "metadata": {
-                            "session_id": str(session_id),
-                            "project_id": str(project_id) if project_id else None,
-                            "user_id": str(user_id)
-                        }
-                    }
-                    yield f"data: {json.dumps(metadata_chunk)}\n\n"
-                    
-                    # Stream the response in sentence chunks for better performance
-                    # Split by sentences (period, exclamation, question mark) but keep the punctuation
-                    sentences = re.split(r'([.!?]\s+)', full_response)
-                    # Recombine sentences with their punctuation
-                    sentence_chunks = []
-                    for i in range(0, len(sentences) - 1, 2):
-                        if i + 1 < len(sentences):
-                            combined = sentences[i] + sentences[i + 1]
-                            if combined.strip():  # Only add non-empty chunks
-                                sentence_chunks.append(combined)
-                        else:
-                            if sentences[i].strip():  # Only add non-empty chunks
-                                sentence_chunks.append(sentences[i])
-                    # Handle last sentence if odd number
-                    if len(sentences) % 2 == 1 and sentences[-1].strip():
-                        sentence_chunks.append(sentences[-1])
-                    
-                    # If no sentence breaks found, split by newlines or fallback to word chunks
-                    if len(sentence_chunks) <= 1:
-                        # Split by newlines first
-                        sentence_chunks = [chunk for chunk in full_response.split('\n') if chunk.strip()]
-                        if len(sentence_chunks) <= 1:
-                            # Fallback: split into chunks of ~20 words
-                            words = full_response.split()
-                            if words:  # Only if we have words
-                                sentence_chunks = []
-                                chunk_size = 20
-                                for i in range(0, len(words), chunk_size):
-                                    chunk = ' '.join(words[i:i + chunk_size])
-                                    if i + chunk_size < len(words):
-                                        chunk += ' '
-                                    sentence_chunks.append(chunk)
-                            else:
-                                # Last resort: send the whole response as one chunk
-                                sentence_chunks = [full_response] if full_response.strip() else ["I'm sorry, I couldn't generate a response."]
-                    
-                    # Ensure we have at least one chunk - CRITICAL: Never send empty response
-                    if not sentence_chunks:
-                        if full_response and full_response.strip():
-                            sentence_chunks = [full_response]
-                        else:
-                            # Last resort fallback - ensure we always send something
-                            sentence_chunks = ["I'm processing your request. Please try again if this message appears."]
-                            print("[CHAT] CRITICAL: No chunks and empty response - using fallback")
-                    
-                    print(f"[CHAT] Streaming {len(sentence_chunks)} chunks")
-                    
+                    # Stream the response word by word for better UX
+                    words = full_response.split()
                     chunk_count = 0
-                    total_chunks = len(sentence_chunks)
                     
-                    for i, chunk in enumerate(sentence_chunks):
-                        if not chunk.strip():  # Skip empty chunks
-                            continue
+                    for i, word in enumerate(words):
                         chunk_count += 1
                         chunk_data = {
                             "type": "content",
-                            "content": chunk,
+                            "content": word + (" " if i < len(words) - 1 else ""),
                             "chunk": chunk_count,
-                            "done": i == total_chunks - 1
+                            "done": i == len(words) - 1
                         }
                         yield f"data: {json.dumps(chunk_data)}\n\n"
-                        print(f"[CHAT] Sent chunk {chunk_count}/{total_chunks}: {len(chunk)} chars")
-                        # Minimal delay - only 0.01s for smooth streaming without timeout
-                        if i < total_chunks - 1:  # No delay on last chunk
-                            await asyncio.sleep(0.01)
+                        await asyncio.sleep(0.1)  # Small delay for streaming effect
                     
-                    # CRITICAL: Save AI response in background to prevent blocking stream completion
-                    # Stream must complete immediately after last chunk to avoid timeout
-                    assistant_message_id = None
-                    async def save_and_process_background():
-                        nonlocal assistant_message_id
+                    # Save AI response
+                    assistant_message_id = await _save_message(
+                        session_id=str(session_id),
+                        user_id=str(user_id),
+                        role="assistant",
+                        content=full_response,
+                        metadata={"is_authenticated": is_authenticated}
+                    )
+                    
+                    # Extract and store attachment analysis from model's response
+                    # Model sees images directly + conversation history + RAG context in single call
+                    # Extract image analysis from the natural response
+                    if image_data_list and attachment_metadata:
+                        await _extract_and_store_attachment_analysis_from_response(
+                            full_response=full_response,
+                            image_data_list=image_data_list,
+                            attachment_metadata=attachment_metadata,
+                            conversation_history=conversation_history,
+                            rag_context=rag_context,
+                            project_id=project_id,
+                            user_id=user_id
+                        )
+                    
+                    # Update dossier if needed (after both user and assistant messages are saved)
+                    # IMPORTANT: re-fetch conversation history so it includes the assistant's reply we just saved
+                    # Fetch ALL messages for dossier (no limit to get complete conversation)
+                    updated_conversation_history = conversation_history
+                    try:
+                        updated_conversation_history = await _get_conversation_history(str(session_id), str(user_id), limit=None)
+                        print(f"📋 [DOSSIER CHECK] Conversation history length: {len(updated_conversation_history)}")
+                    except Exception as _history_e:
+                        print(f"⚠️ Failed to refresh conversation history before dossier update: {_history_e}")
+
+                    print(f"📋 [DOSSIER CHECK] Checking dossier update conditions:")
+                    print(f"   - dossier_extractor available: {dossier_extractor is not None}")
+                    print(f"   - project_id: {project_id}")
+                    print(f"   - conversation history length: {len(updated_conversation_history)}")
+                    print(f"   - All conditions met: {dossier_extractor and project_id and len(updated_conversation_history) >= 2}")
+
+                    if dossier_extractor and project_id and len(updated_conversation_history) >= 2:
                         try:
-                            assistant_message_id = await asyncio.wait_for(
-                                _save_message(
+                            # Force update every 2 user turns (more reliable than LLM decision)
+                            user_turns = sum(1 for m in updated_conversation_history if m.get("role") == "user")
+                            should_update = user_turns >= 2 and user_turns % 2 == 0
+                            
+                            print(f"📋 [DOSSIER] User turns: {user_turns}, Should update: {should_update}")
+                            
+                            if should_update:
+                                print(f"📋 Updating dossier for project {project_id}")
+                                print(f"📋 [EXTRACT] Calling dossier_extractor.extract_metadata with {len(updated_conversation_history)} messages")
+                                print(f"📋 [EXTRACT] First 2 messages: {updated_conversation_history[:2] if len(updated_conversation_history) >= 2 else updated_conversation_history}")
+                                new_metadata = await dossier_extractor.extract_metadata(updated_conversation_history)
+                                print(f"📋 [EXTRACT] Extraction complete. Metadata keys: {list(new_metadata.keys())}")
+                                print(f"📋 [EXTRACT] Characters: {len(new_metadata.get('characters', []))}, Scenes: {len(new_metadata.get('scenes', []))}")
+
+                                # Fetch existing dossier FIRST to merge characters/scenes and preserve title
+                                existing_snapshot = {}
+                                current_title = None
+                                try:
+                                    from ..database.session_service_supabase import session_service
+                                    existing_dossier = session_service.get_dossier(UUID(project_id), UUID(user_id))
+                                    if existing_dossier:
+                                        existing_snapshot = existing_dossier.snapshot_json or {}
+                                        current_title = existing_snapshot.get("title")
+                                        print(f"📋 Fetched existing dossier: {current_title}")
+                                        print(f"📋 Existing characters: {len(existing_snapshot.get('characters', []))}")
+                                        print(f"📋 Existing scenes: {len(existing_snapshot.get('scenes', []))}")
+                                except Exception as _e:
+                                    print(f"⚠️ Could not fetch existing dossier: {_e}")
+
+                                # Merge characters by name (case-insensitive)
+                                try:
+                                    existing_chars = existing_snapshot.get("characters", []) or []
+                                    new_chars = new_metadata.get("characters", []) or []
+                                    if new_chars:
+                                        by_name = {}
+                                        for c in existing_chars:
+                                            key = (c.get("name") or "").strip().lower()
+                                            by_name[key] = c
+                                        for c in new_chars:
+                                            key = (c.get("name") or "").strip().lower()
+                                            if key in by_name:
+                                                merged = {**by_name[key], **{k: v for k, v in c.items() if v}}
+                                                by_name[key] = merged
+                                            else:
+                                                by_name[key] = c
+                                        new_metadata["characters"] = list(by_name.values())
+                                        print(f"📋 Merged characters: {len(new_metadata['characters'])}")
+                                    elif existing_chars:
+                                        new_metadata["characters"] = existing_chars
+                                        print(f"📋 Preserved existing characters: {len(existing_chars)}")
+                                except Exception as e:
+                                    print(f"⚠️ Character merge failed: {e}")
+
+                                # Merge scenes by one_liner
+                                try:
+                                    existing_scenes = existing_snapshot.get("scenes", []) or []
+                                    new_scenes = new_metadata.get("scenes", []) or []
+                                    if new_scenes:
+                                        by_line = {}
+                                        for s in existing_scenes:
+                                            key = (s.get("one_liner") or "").strip().lower()
+                                            by_line[key] = s
+                                        for s in new_scenes:
+                                            key = (s.get("one_liner") or "").strip().lower()
+                                            if key in by_line:
+                                                merged = {**by_line[key], **{k: v for k, v in s.items() if v}}
+                                                by_line[key] = merged
+                                            else:
+                                                by_line[key] = s
+                                        new_metadata["scenes"] = list(by_line.values())
+                                        print(f"📋 Merged scenes: {len(new_metadata['scenes'])}")
+                                    elif existing_scenes:
+                                        new_metadata["scenes"] = existing_scenes
+                                        print(f"📋 Preserved existing scenes: {len(existing_scenes)}")
+                                except Exception as e:
+                                    print(f"⚠️ Scene merge failed: {e}")
+
+                                # Preserve user-entered project title
+                                if current_title:
+                                    new_metadata["title"] = current_title
+                                    print(f"📋 Preserved project title: {current_title}")
+
+                                # Update dossier in database
+                                dossier_update = DossierUpdate(
+                                    snapshot_json=new_metadata
+                                )
+                                updated_dossier = session_service.update_dossier(
+                                    UUID(project_id),
+                                    UUID(user_id),
+                                    dossier_update
+                                )
+                                if updated_dossier:
+                                    print(f"✅ Dossier updated: {updated_dossier.title}")
+                                # Send updated dossier to the client for immediate refresh
+                                await send_event({
+                                    "type": "dossier_updated",
+                                    "project_id": str(project_id),
+                                    "dossier": new_metadata,
+                                    "conversation_history": updated_conversation_history
+                                })
+                            else:
+                                print(f"📋 Dossier update not needed for this turn (messages={len(updated_conversation_history)})")
+                        except Exception as e:
+                            print(f"⚠️ Failed to update dossier")
+                            print(f"Error details: {e}")
+                    
+                    # Store message embeddings for RAG
+                    if rag_service and assistant_message_id:
+                        try:
+                            if is_authenticated:
+                                # For authenticated users, use their actual user_id
+                                rag_user_id = UUID(user_id)
+                            else:
+                                # For anonymous users, use the special anonymous user ID
+                                rag_user_id = UUID("00000000-0000-0000-0000-000000000000")
+                            
+                            await rag_service.embed_and_store_message(
+                                message_id=UUID(assistant_message_id),
+                                user_id=rag_user_id,
+                                project_id=UUID(project_id) if project_id else None,
+                                session_id=UUID(session_id),
+                                content=full_response,
+                                role="assistant",
+                                metadata={"is_authenticated": is_authenticated, "original_user_id": str(user_id), "session_id": str(session_id)}
+                            )
+                            print(f"📚 Stored assistant message embedding: {assistant_message_id}")
+                        except Exception as e:
+                            print(f"⚠️ Failed to store assistant message embedding: {e}")
+
+                    # Detect completion and handle wrap-up actions
+                    try:
+                        # Fetch all messages to accurately detect story completion
+                        updated_history_for_completion = await _get_conversation_history(str(session_id), str(user_id), limit=None)
+                        message_count = len(updated_history_for_completion) if updated_history_for_completion else 0
+                        
+                        # Only check for completion if we have enough conversation history
+                        # This prevents false positives from first messages that might contain phrases like "new story"
+                        MIN_MESSAGES_FOR_COMPLETION = 6  # At least 3 user + 3 assistant messages
+                        
+                        print(f"🔍 [COMPLETION CHECK] Checking story completion...")
+                        print(f"🔍 [COMPLETION CHECK] Total messages in conversation: {message_count}")
+                        print(f"🔍 [COMPLETION CHECK] Response length: {len(full_response)} chars")
+                        print(f"🔍 [COMPLETION CHECK] Response preview: {full_response[:300]}...")
+                        
+                        is_complete = False
+                        if message_count < MIN_MESSAGES_FOR_COMPLETION:
+                            print(f"⏭️ [COMPLETION CHECK] Skipping completion check - only {message_count} messages (minimum {MIN_MESSAGES_FOR_COMPLETION} required)")
+                        else:
+                            is_complete = _is_story_completion_text(full_response)
+                            print(f"🔍 [COMPLETION CHECK] Is complete: {is_complete}")
+                        
+                        if is_complete:
+                            print("✅ Story completion detected. Generating script and transcript for validation.")
+                            # fetch dossier snapshot if available
+                            dossier_snapshot = None
+                            try:
+                                if project_id:
+                                    from ..database.session_service_supabase import session_service
+                                    d = session_service.get_dossier(UUID(project_id), UUID(user_id))
+                                    dossier_snapshot = d.snapshot_json if d else None
+                            except Exception as _e:
+                                print(f"⚠️ Could not fetch dossier snapshot for email: {_e}")
+
+                            # Generate conversation transcript
+                            transcript = await _generate_conversation_transcript(updated_history_for_completion)
+                            print(f"📋 Generated conversation transcript ({len(transcript)} chars)")
+
+                            # Generate proper video script using AI
+                            generated_script = ""
+                            if ai_manager and dossier_snapshot:
+                                try:
+                                    print("🎬 Generating professional video script...")
+                                    script_response = await ai_manager.generate_response(
+                                        prompt="Generate script based on story data",
+                                        task_type=TaskType.SCRIPT,
+                                        dossier_context=dossier_snapshot
+                                    )
+                                    generated_script = script_response.get("response", "")
+                                    print(f"✅ Generated script ({len(generated_script)} chars)")
+                                except Exception as e:
+                                    print(f"⚠️ Script generation failed: {e}")
+                                    generated_script = f"Script generation failed. Chat response: {full_response}"
+                            else:
+                                print("⚠️ Using fallback - chat response as script")
+                                generated_script = full_response
+
+                            # try to get user email/name from users table if authenticated
+                            user_email = None
+                            user_name = None
+                            if is_authenticated:
+                                try:
+                                    supabase = get_supabase_client()
+                                    print(f"📧 [VALIDATION] Fetching user email for user_id: {user_id}")
+                                    # Fix: Use 'user_id' not 'id' - matches schema
+                                    res = supabase.table("users").select("email, display_name").eq("user_id", str(user_id)).limit(1).execute()
+                                    if res.data and len(res.data) > 0:
+                                        user_email = res.data[0].get("email")
+                                        user_name = res.data[0].get("display_name")
+                                        print(f"📧 [VALIDATION] Found user email: {user_email}, name: {user_name}")
+                                    else:
+                                        print(f"⚠️ [VALIDATION] No user found with user_id: {user_id}")
+                                except Exception as e:
+                                    print(f"❌ [VALIDATION] Error fetching user email: {e}")
+                                    pass
+                            
+                            # Check if we can deliver the story
+                            if not user_email:
+                                if not is_authenticated:
+                                    print("⚠️ Anonymous user - story will be validated but not delivered (no email available)")
+                                else:
+                                    print("⚠️ Authenticated user but no email found in database")
+                                user_email = None
+
+                            # Queue for human validation instead of direct client email
+                            try:
+                                await _queue_for_validation(
+                                    user_email=user_email,
+                                    user_name=user_name,
+                                    project_id=str(project_id),
+                                    dossier_snapshot=dossier_snapshot,
+                                    conversation_transcript=transcript,
+                                    generated_script=generated_script,
                                     session_id=str(session_id),
                                     user_id=str(user_id),
-                                    role="assistant",
-                                    content=full_response,
-                                    metadata={"is_authenticated": is_authenticated}
-                                ),
-                                timeout=2.0
-                            )
-                            
-                            # Extract and store attachment analysis (non-blocking)
-                            if image_data_list and attachment_metadata:
-                                try:
-                                    await asyncio.wait_for(
-                                        _extract_and_store_attachment_analysis_from_response(
-                                            full_response=full_response,
-                                            image_data_list=image_data_list,
-                                            attachment_metadata=attachment_metadata,
-                                            conversation_history=conversation_history,
-                                            rag_context=rag_context,
-                                            project_id=project_id,
-                                            user_id=user_id
-                                        ),
-                                        timeout=3.0
-                                    )
-                                except Exception as e:
-                                    print(f"⚠️ Failed to extract attachment analysis: {e}")
-                        except Exception as e:
-                            print(f"⚠️ Failed to save assistant message: {e}")
-                    
-                    # Start background task - don't await (stream completes immediately)
-                    asyncio.create_task(save_and_process_background())
-                    
-                    # Store message embeddings for RAG (non-blocking - wait for message_id)
-                    if rag_service:
-                        async def store_assistant_embedding():
-                            try:
-                                # Wait for assistant_message_id from background save task
-                                max_wait = 3
-                                waited = 0
-                                while assistant_message_id is None and waited < max_wait:
-                                    await asyncio.sleep(0.1)
-                                    waited += 0.1
-                                
-                                if assistant_message_id is None:
-                                    print(f"⚠️ [RAG] assistant_message_id not available, skipping embedding")
-                                    return
-                                
-                                if is_authenticated:
-                                    rag_user_id = UUID(user_id)
-                                else:
-                                    rag_user_id = UUID("00000000-0000-0000-0000-000000000000")
-                                
-                                await asyncio.wait_for(
-                                    rag_service.embed_and_store_message(
-                                        message_id=UUID(assistant_message_id),
-                                        user_id=rag_user_id,
-                                        project_id=UUID(project_id) if project_id else None,
-                                        session_id=UUID(session_id),
-                                        content=full_response,
-                                        role="assistant",
-                                        metadata={"is_authenticated": is_authenticated, "original_user_id": str(user_id), "session_id": str(session_id)}
-                                    ),
-                                    timeout=2.0
                                 )
-                                print(f"📚 Stored assistant message embedding: {assistant_message_id}")
-                            except Exception as e:
-                                print(f"⚠️ Failed to store assistant message embedding: {e}")
-                        
-                        # Don't await - run in background
-                        asyncio.create_task(store_assistant_embedding())
-                    else:
-                        # Fallback response if AI is not available
-                        print("[CHAT] WARNING: AI not available, using fallback response")
-                        fallback_response = "I'm sorry, I'm having trouble connecting to my AI backend right now. Please try again in a moment."
-                        
-                        # Send session metadata first (so frontend can store it)
-                        metadata_chunk = {
-                            "type": "metadata",
-                            "metadata": {
-                                "session_id": str(session_id),
-                                "project_id": str(project_id) if project_id else None,
-                                "user_id": str(user_id)
-                            }
-                        }
-                        yield f"data: {json.dumps(metadata_chunk)}\n\n"
-                        
-                        # Stream fallback response in sentence chunks (same as success path)
-                        sentences = re.split(r'([.!?]\s+)', fallback_response)
-                        sentence_chunks = []
-                        for i in range(0, len(sentences) - 1, 2):
-                            if i + 1 < len(sentences):
-                                combined = sentences[i] + sentences[i + 1]
-                                if combined.strip():
-                                    sentence_chunks.append(combined)
-                            else:
-                                if sentences[i].strip():
-                                    sentence_chunks.append(sentences[i])
-                        if len(sentences) % 2 == 1 and sentences[-1].strip():
-                            sentence_chunks.append(sentences[-1])
-                        
-                        if not sentence_chunks:
-                            sentence_chunks = [fallback_response]
-                        
-                        print(f"[CHAT] Streaming fallback: {len(sentence_chunks)} chunks")
-                        
-                        for i, chunk in enumerate(sentence_chunks):
-                            if not chunk.strip():
-                                continue
-                            chunk_data = {
-                                "type": "content",
-                                "content": chunk,
-                                "chunk": i + 1,
-                                "done": i == len(sentence_chunks) - 1
-                            }
-                            yield f"data: {json.dumps(chunk_data)}\n\n"
-                            if i < len(sentence_chunks) - 1:
-                                await asyncio.sleep(0.01)
-                        
-                        # Save fallback response
-                        fallback_message_id = await _save_message(
-                            session_id=str(session_id),
-                            user_id=str(user_id),
-                            role="assistant",
-                            content=fallback_response,
-                            metadata={"is_authenticated": is_authenticated, "fallback": True}
-                        )
-                        
-                        # Store fallback message embedding for RAG
-                        if rag_service and fallback_message_id:
+                                print("✅ [VALIDATION] Successfully queued story for validation")
+                            except Exception as validation_error:
+                                print(f"❌ [VALIDATION] CRITICAL ERROR queuing for validation: {validation_error}")
+                                import traceback
+                                print(f"❌ [VALIDATION] Traceback: {traceback.format_exc()}")
+
+                            # mark session inactive
                             try:
-                                # Use consistent user_id for RAG (same as storage)
-                                rag_user_id = UUID(user_id) if is_authenticated else UUID(session_id)
-                                await rag_service.embed_and_store_message(
-                                    message_id=UUID(fallback_message_id),
-                                    user_id=rag_user_id,
-                                    project_id=UUID(project_id) if project_id else None,
-                                    session_id=UUID(session_id),
-                                    content=fallback_response,
-                                    role="assistant",
-                                    metadata={"is_authenticated": is_authenticated, "fallback": True, "original_user_id": str(user_id)}
-                                )
-                                print(f"📚 Stored fallback message embedding: {fallback_message_id}")
-                            except Exception as e:
-                                print(f"⚠️ Failed to store fallback message embedding: {e}")
+                                supabase = get_supabase_client()
+                                supabase.table("sessions").update({
+                                    "is_active": False,
+                                    "updated_at": datetime.now(timezone.utc).isoformat()
+                                }).eq("session_id", str(session_id)).execute()
+                            except Exception as _e:
+                                print(f"⚠️ Failed to close session: {_e}")
+                    except Exception as _e:
+                        print(f"⚠️ Completion handling error: {_e}")
                     
-                    # Update session last message time (non-blocking to prevent timeout)
-                    async def update_session_background():
-                        try:
-                            await asyncio.wait_for(
-                                _update_session_activity(str(session_id)),
-                                timeout=1.0
-                            )
-                        except Exception as e:
-                            print(f"⚠️ Failed to update session activity: {e}")
+                else:
+                    # Fallback response if AI is not available
+                    fallback_response = "Woops! Something went wrong. Please try again later."
                     
-                    asyncio.create_task(update_session_background())
-                    
-                except Exception as e:
-                    print(f"Error in chat generation: {e}")
-                    error_response = f"I apologize, but I'm having trouble generating a response right now. Please try again later."
-                    
-                    # Stream error response in sentence chunks (same as success path)
-                    sentences = re.split(r'([.!?]\s+)', error_response)
-                    sentence_chunks = []
-                    for i in range(0, len(sentences) - 1, 2):
-                        if i + 1 < len(sentences):
-                            sentence_chunks.append(sentences[i] + sentences[i + 1])
-                        else:
-                            sentence_chunks.append(sentences[i])
-                    if len(sentences) % 2 == 1:
-                        sentence_chunks.append(sentences[-1])
-                    
-                    if len(sentence_chunks) <= 1:
-                        sentence_chunks = error_response.split('\n')
-                        if len(sentence_chunks) <= 1:
-                            words = error_response.split()
-                            sentence_chunks = []
-                            chunk_size = 20
-                            for i in range(0, len(words), chunk_size):
-                                chunk = ' '.join(words[i:i + chunk_size])
-                                if i + chunk_size < len(words):
-                                    chunk += ' '
-                                sentence_chunks.append(chunk)
-                    
-                    for i, chunk in enumerate(sentence_chunks):
+                    # Stream fallback response
+                    words = fallback_response.split()
+                    for i, word in enumerate(words):
                         chunk_data = {
                             "type": "content",
-                            "content": chunk,
+                            "content": word + (" " if i < len(words) - 1 else ""),
                             "chunk": i + 1,
-                            "done": i == len(sentence_chunks) - 1,
-                            "error": True
+                            "done": i == len(words) - 1
                         }
                         yield f"data: {json.dumps(chunk_data)}\n\n"
-                        if i < len(sentence_chunks) - 1:
-                            await asyncio.sleep(0.01)
+                        await asyncio.sleep(0.1)
+                    
+                    # Save fallback response
+                    fallback_message_id = await _save_message(
+                        session_id=str(session_id),
+                        user_id=str(user_id),
+                        role="assistant",
+                        content=fallback_response,
+                        metadata={"is_authenticated": is_authenticated, "fallback": True}
+                    )
+                    
+                    # Store fallback message embedding for RAG
+                    if rag_service and fallback_message_id:
+                        try:
+                            # Use consistent user_id for RAG (same as storage)
+                            rag_user_id = UUID(user_id) if is_authenticated else UUID(session_id)
+                            await rag_service.embed_and_store_message(
+                                message_id=UUID(fallback_message_id),
+                                user_id=rag_user_id,
+                                project_id=UUID(project_id) if project_id else None,
+                                session_id=UUID(session_id),
+                                content=fallback_response,
+                                role="assistant",
+                                metadata={"is_authenticated": is_authenticated, "fallback": True, "original_user_id": str(user_id)}
+                            )
+                            print(f"📚 Stored fallback message embedding: {fallback_message_id}")
+                        except Exception as e:
+                            print(f"⚠️ Failed to store fallback message embedding: {e}")
+                
+                # Update session last message time
+                await _update_session_activity(str(session_id))
+                
+            except Exception as e:
+                print(f"Error in chat generation: {e}")
+                error_response = f"I apologize, but I'm having trouble generating a response right now. Please try again later."
+                
+                # Stream error response
+                words = error_response.split()
+                for i, word in enumerate(words):
+                    chunk_data = {
+                        "type": "content",
+                        "content": word + (" " if i < len(words) - 1 else ""),
+                        "chunk": i + 1,
+                        "done": i == len(words) - 1,
+                        "error": True
+                    }
+                    yield f"data: {json.dumps(chunk_data)}\n\n"
+                    await asyncio.sleep(0.1)
         
         return StreamingResponse(
             generate_stream(),
@@ -996,106 +916,127 @@ async def _extract_and_store_attachment_analysis_from_response(
             print("⚠️ [ATTACHMENT ANALYSIS] Supabase not available, skipping storage")
             return
         
-        # For each image attachment, extract analysis from the response
+        # Build filename list to help section mapping
+        filenames = [img.get("filename", "image.png") for img in image_data_list]
+        
+        # Try to split the assistant response into per-image sections using our enforced format
+        # Sections like: "Image 1: <filename>" ... "Image 2: <filename>" ... followed by "Combined Summary"
+        per_image_analysis: Dict[str, str] = {}
+        try:
+            import re
+            # Create a pattern that finds "Image <index>: <anything>" headers
+            header_regex = re.compile(r"(?i)(Image\s+(\d+)\s*:\s*(.*?))\n", re.M)
+            matches = list(header_regex.finditer(full_response))
+            if matches:
+                # Append a sentinel end at end of text to slice last section
+                spans = []
+                for i, m in enumerate(matches):
+                    start = m.start()
+                    end = matches[i+1].start() if i+1 < len(matches) else len(full_response)
+                    spans.append((m, start, end))
+                for m, start, end in spans:
+                    idx_str = m.group(2)
+                    fname_header = m.group(3).strip()
+                    section_text = full_response[start:end].strip()
+                    try:
+                        idx = int(idx_str) - 1
+                        if 0 <= idx < len(filenames):
+                            key = filenames[idx]
+                            per_image_analysis[key] = section_text
+                        else:
+                            # Fallback: map by header filename if present
+                            per_image_analysis[fname_header] = section_text
+                    except:
+                        per_image_analysis[fname_header] = section_text
+        except Exception as e:
+            print(f"⚠️ [ATTACHMENT ANALYSIS] Failed to split per-image sections: {e}")
+        
+        # For each image attachment, extract targeted analysis
         for img_data in image_data_list:
             filename = img_data.get("filename", "unknown")
             metadata = attachment_metadata.get(filename)
             
-            if not metadata:
-                continue
+            file_type = (metadata or {}).get("file_type", "image")
+            asset_id = (metadata or {}).get("asset_id")
             
-            asset_id = metadata.get("asset_id")
-            file_type = metadata.get("file_type", "image")
+            # Pick the most relevant analysis: dedicated section if available, otherwise full response
+            analysis_text = per_image_analysis.get(filename) or full_response
             
+            # Ensure we have an asset to tie analysis/embedding to
             if not asset_id:
-                print(f"⚠️ [ATTACHMENT ANALYSIS] No asset_id found for {filename}, skipping")
-                continue
+                try:
+                    from uuid import uuid4
+                    new_asset_id = str(uuid4())
+                    minimal_asset = {
+                        "id": new_asset_id,
+                        "project_id": str(project_id) if project_id else None,
+                        "media_type": "image",
+                        "uri": filename,
+                        "processing_status": "processed",
+                        "processing_metadata": {"source": "chat_inline", "filename": filename},
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }
+                    supabase.table("assets").insert(minimal_asset).execute()
+                    asset_id = new_asset_id
+                    print(f"✅ [ATTACHMENT ANALYSIS] Created minimal asset {asset_id} for {filename}")
+                except Exception as e:
+                    print(f"⚠️ [ATTACHMENT ANALYSIS] Failed to create minimal asset for {filename}: {e}")
+                    asset_id = None
             
-            # Use the model's response as the analysis
-            # The response contains visual details since model saw the image with full context
-            # Combine response with conversation context for richer analysis
-            analysis_text = full_response
-            
-            # Enhance analysis with context if available
-            if conversation_history:
-                recent_context = " | ".join([
-                    f"{msg.get('role', 'unknown')}: {msg.get('content', '')[:50]}"
-                    for msg in conversation_history[-3:]
-                ])
-                analysis_text = f"Context: {recent_context}\n\nAnalysis: {full_response}"
-            
-            if not analysis_text:
-                print(f"⚠️ [ATTACHMENT ANALYSIS] Empty response for {filename}, skipping")
-                continue
-            
-            # Store in assets table (generic for all file types)
-            update_data = {
-                "analysis": analysis_text,
-                "analysis_type": file_type,  # Use file_type instead of hardcoded type
-                "analysis_data": {
-                    "extracted_from": "gpt4o_analysis" if file_type == "image" else "document_processor",
-                    "filename": filename,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "file_type": file_type
+            # Update asset analysis fields when we have an asset
+            if asset_id:
+                update_data = {
+                    "analysis": analysis_text,
+                    "analysis_type": file_type,
+                    "analysis_data": {
+                        "extracted_from": "gpt4o_analysis",
+                        "filename": filename,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "file_type": file_type
+                    }
                 }
-            }
+                try:
+                    supabase.table("assets").update(update_data).eq("id", asset_id).execute()
+                    print(f"✅ [ATTACHMENT ANALYSIS] Stored analysis for asset {asset_id} ({filename}, type: {file_type})")
+                except Exception as e:
+                    print(f"❌ [ATTACHMENT ANALYSIS] Failed to update asset {asset_id}: {e}")
             
+            # Create an embedding for RAG storage regardless of asset update success
             try:
-                supabase.table("assets").update(update_data).eq("id", asset_id).execute()
-                print(f"✅ [ATTACHMENT ANALYSIS] Stored analysis for asset {asset_id} ({filename}, type: {file_type})")
-                
-                # Create embedding for RAG storage (only for images - documents already embedded during upload)
-                if file_type == "image":
-                    try:
-                        from ..ai.document_processor import document_processor
-                        from ..ai.embedding_service import get_embedding_service
-                        
-                        if document_processor and hasattr(document_processor, 'vector_storage'):
-                            # Use GPT-4o's analysis text for embedding
-                            # This text contains rich semantic information guided by user's prompt
-                            embedding_text = f"Attachment Analysis ({filename}): {analysis_text}"
-                            
-                            # Generate OpenAI text embedding from GPT-4o's analysis
-                            embedding_service = get_embedding_service()
-                            if embedding_service:
-                                embedding = await embedding_service.generate_query_embedding(embedding_text)
-                                
-                                if embedding:
-                                    # Store using document processor's vector storage
-                                    await document_processor.vector_storage.store_document_embedding(
-                                        asset_id=UUID(asset_id),
-                                        user_id=UUID(user_id),
-                                        project_id=UUID(project_id) if project_id else None,
-                                        document_type=file_type,  # Generic: "image", "document", etc.
-                                        chunk_index=0,
-                                        chunk_text=embedding_text,
-                                        embedding=embedding,  # OpenAI embedding (1536 dims)
-                                        metadata={
-                                            "filename": filename,
-                                            "file_type": file_type,
-                                            "embedding_model": "text-embedding-3-small",
-                                            "analysis": analysis_text
-                                        }
-                                    )
-                                    print(f"✅ [RAG] Created embedding for {file_type} analysis: {filename}")
-                                else:
-                                    print(f"⚠️ [RAG] Failed to generate embedding for {filename}")
-                            else:
-                                print(f"⚠️ [RAG] Embedding service not available")
-                        else:
-                            print(f"⚠️ [RAG] Document processor vector storage not available")
-                    except Exception as e:
-                        print(f"⚠️ [RAG] Failed to create embedding for {filename}: {e}")
-                        import traceback
-                        print(traceback.format_exc())
+                from ..ai.embedding_service import get_embedding_service
+                from ..ai.vector_storage import vector_storage
+
+                embedding_text = f"Attachment Analysis ({filename}): {analysis_text}"
+                embedding_service = get_embedding_service()
+                if embedding_service:
+                    embedding = await embedding_service.generate_query_embedding(embedding_text)
+                    if embedding and asset_id:
+                        await vector_storage.store_document_embedding(
+                            asset_id=UUID(asset_id),
+                            user_id=UUID(user_id),
+                            project_id=UUID(project_id) if project_id else None,
+                            document_type=file_type,
+                            chunk_index=0,
+                            chunk_text=embedding_text,
+                            embedding=embedding,
+                            metadata={
+                                "filename": filename,
+                                "file_type": file_type,
+                                "embedding_model": "text-embedding-3-small",
+                                "analysis": analysis_text
+                            }
+                        )
+                        print(f"✅ [RAG] Created embedding for {file_type} analysis: {filename}")
+                    elif not asset_id:
+                        print(f"⚠️ [RAG] Skipped document_embedding due to missing asset_id (analysis still embedded via assistant message)")
+                    else:
+                        print(f"⚠️ [RAG] Failed to generate embedding for {filename}")
                 else:
-                    print(f"ℹ️ [RAG] Skipping embedding for {file_type} - already processed during upload")
-                        
+                    print(f"⚠️ [RAG] Embedding service not available")
             except Exception as e:
-                print(f"❌ [ATTACHMENT ANALYSIS] Failed to store analysis for {filename}: {e}")
+                print(f"⚠️ [RAG] Failed to create embedding for {filename}: {e}")
                 import traceback
                 print(traceback.format_exc())
-                
     except Exception as e:
         print(f"❌ [ATTACHMENT ANALYSIS] Error in extract_and_store_attachment_analysis_from_response: {e}")
         import traceback
@@ -1110,49 +1051,43 @@ async def _save_message(
 ) -> str:
     """Save a message to the database"""
     supabase = get_supabase_client()
-
-    message_id = str(uuid4())
-    if not supabase:
-        # No-op storage for MVP without DB
-        return message_id
-
-    # Store user_id in metadata since chat_messages table doesn't have user_id column
-    message_metadata = metadata or {}
-    message_metadata["user_id"] = user_id
     
+    message_id = str(uuid4())
     message_data = {
         "message_id": message_id,
         "session_id": session_id,
         "role": role,
         "content": content,
-        "metadata": message_metadata,
+        "metadata": metadata or {},
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat()
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "user_id": user_id
     }
-
+    
     supabase.table("chat_messages").insert(message_data).execute()
     return message_id
 
-async def _get_conversation_history(session_id: str, user_id: str, limit: int = 10) -> List[Dict]:
-    """Get conversation history for context"""
+async def _get_conversation_history(session_id: str, user_id: str, limit: int = None) -> List[Dict]:
+    """Get conversation history for context. If limit is None, fetches all messages."""
     supabase = get_supabase_client()
-    if not supabase:
-        return []
-
-    # Note: chat_messages table doesn't have user_id column - it's linked via session_id
-    # session_id already belongs to a specific user, so no need to filter by user_id
-    result = (
-        supabase.table("chat_messages")
-        .select("*")
-        .eq("session_id", session_id)
+    
+    # Build query
+    query = supabase.table("chat_messages")\
+        .select("*")\
+        .eq("session_id", session_id)\
+        .eq("user_id", user_id)\
         .order("created_at", desc=False)
-        .limit(limit)
-        .execute()
-    )
-
+    
+    # Only apply limit if specified
+    if limit is not None:
+        query = query.limit(limit)
+    
+    result = query.execute()
+    
     if not result.data:
         return []
-
+    
+    # Convert to conversation format
     conversation = []
     for message in result.data:
         conversation.append({
@@ -1161,16 +1096,14 @@ async def _get_conversation_history(session_id: str, user_id: str, limit: int = 
             "timestamp": message["created_at"],
             "attached_files": message.get("metadata", {}).get("attached_files", [])
         })
-
+    
     print(f"📚 Retrieved {len(conversation)} messages from conversation history for session {session_id}")
     return conversation
 
 async def _update_session_activity(session_id: str):
     """Update session last message time"""
     supabase = get_supabase_client()
-    if not supabase:
-        return
-
+    
     supabase.table("sessions").update({
         "last_message_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat()

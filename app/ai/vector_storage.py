@@ -3,38 +3,10 @@ Vector Storage Service
 Handles storing and retrieving embeddings from Supabase
 """
 
-from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from langsmith import RunTree
+from typing import List, Optional, Dict, Any, Tuple
 from uuid import UUID, uuid4
 from datetime import datetime
 from ..database.supabase import get_supabase_client
-
-# LangSmith tracing
-# Use tracing_context for async functions (more reliable than @traceable)
-try:
-    from langsmith.run_helpers import tracing_context
-    import os
-    from dotenv import load_dotenv
-    load_dotenv()
-    
-    # Get config
-    LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT", "simon-chatbot")
-    LANGSMITH_WORKSPACE_ID = os.getenv("LANGSMITH_WORKSPACE_ID")
-    
-    # Ensure environment variables are set
-    if LANGSMITH_PROJECT:
-        os.environ["LANGSMITH_PROJECT"] = LANGSMITH_PROJECT
-    if LANGSMITH_WORKSPACE_ID:
-        os.environ["LANGSMITH_WORKSPACE_ID"] = LANGSMITH_WORKSPACE_ID
-    os.environ["LANGSMITH_TRACING"] = "true"
-    
-    LANGSMITH_AVAILABLE = True
-except ImportError:
-    LANGSMITH_AVAILABLE = False
-    tracing_context = None
-    from contextlib import nullcontext as tracing_context
 
 
 class VectorStorageService:
@@ -100,29 +72,35 @@ class VectorStorageService:
             print(f"ERROR: Failed to store message embedding: {e}")
             return None
     
-    async def _get_similar_user_messages_impl(
+    async def get_similar_user_messages(
         self,
         query_embedding: List[float],
         user_id: UUID,
         project_id: Optional[UUID] = None,
-        session_id: Optional[UUID] = None,
         match_count: int = 10,
         similarity_threshold: float = 0.7
     ) -> List[Dict[str, Any]]:
         """
-        Internal implementation of user message retrieval
-        CRITICAL: session_id ensures session isolation - only retrieves messages from current session
+        Retrieve similar messages for a user using vector similarity search
+        
+        Args:
+            query_embedding: Query embedding vector
+            user_id: ID of the user
+            project_id: Optional project ID to filter by
+            match_count: Maximum number of results
+            similarity_threshold: Minimum similarity score (0-1)
+            
+        Returns:
+            List of similar messages with similarity scores
         """
         try:
             # Call the Supabase function
-            # session_id is optional - if provided, filters to that session only (for chat isolation)
             result = self.supabase.rpc(
                 'get_similar_user_messages',
                 {
                     'query_embedding': query_embedding,
                     'query_user_id': str(user_id),
                     'query_project_id': str(project_id) if project_id else None,
-                    'query_session_id': str(session_id) if session_id else None,  # NEW: Session filter for isolation
                     'match_count': match_count,
                     'similarity_threshold': similarity_threshold
                 }
@@ -130,14 +108,11 @@ class VectorStorageService:
             
             if result.data:
                 print(f"SUCCESS: Found {len(result.data)} similar user messages")
-                # Debug: Check user and session isolation
+                # Debug: Check user isolation
                 for message in result.data:
                     msg_user_id = message.get('user_id')
-                    msg_session_id = message.get('session_id')
                     if msg_user_id != str(user_id):
-                        print(f"[SECURITY] WARNING: Found message from different user! Expected: {user_id}, Found: {msg_user_id}")
-                    if session_id and msg_session_id != str(session_id):
-                        print(f"[SECURITY] WARNING: Found message from different session! Expected: {session_id}, Found: {msg_session_id}")
+                        print(f"🚨 SECURITY WARNING: Found message from different user! Expected: {user_id}, Found: {msg_user_id}")
                 return result.data
             else:
                 print("INFO: No similar user messages found")
@@ -147,71 +122,7 @@ class VectorStorageService:
             print(f"ERROR: Failed to retrieve similar user messages: {e}")
             return []
     
-    async def get_similar_user_messages(
-        self,
-        query_embedding: List[float],
-        user_id: UUID,
-        project_id: Optional[UUID] = None,
-        session_id: Optional[UUID] = None,
-        match_count: int = 10,
-        similarity_threshold: float = 0.7,
-        parent_run_tree: Optional["RunTree"] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Retrieve similar messages for a user using vector similarity search
-        
-        Args:
-            query_embedding: Query embedding vector
-            user_id: ID of the user
-            project_id: Optional project ID to filter by
-            session_id: Optional session ID to filter by (CRITICAL: ensures session isolation - only gets messages from current session)
-            match_count: Maximum number of results
-            similarity_threshold: Minimum similarity score (0-1)
-            parent_run_tree: Optional parent run tree for explicit context propagation
-            
-        Returns:
-            List of similar messages with similarity scores
-        """
-        # Use tracing_context with explicit parent for async functions
-        if LANGSMITH_AVAILABLE and tracing_context:
-            trace_kwargs = {
-                "project_name": LANGSMITH_PROJECT,
-                "name": "VectorStoreRetriever_user_messages",
-                "run_type": "retriever",
-                "tags": ["rag", "vector_search", "retrieval"],
-                "metadata": {
-                    "user_id": str(user_id),
-                    "project_id": str(project_id) if project_id else None,
-                    "session_id": str(session_id) if session_id else None,
-                    "match_count": match_count,
-                    "similarity_threshold": similarity_threshold,
-                    "embedding_dimension": len(query_embedding) if query_embedding else 0
-                }
-            }
-            # Pass parent run tree explicitly if provided
-            if parent_run_tree is not None:
-                trace_kwargs["parent"] = parent_run_tree
-            
-            with tracing_context(**trace_kwargs):
-                return await self._get_similar_user_messages_impl(
-                    query_embedding=query_embedding,
-                    user_id=user_id,
-                    project_id=project_id,
-                    session_id=session_id,  # Pass session_id for isolation
-                    match_count=match_count,
-                    similarity_threshold=similarity_threshold
-                )
-        else:
-            return await self._get_similar_user_messages_impl(
-                query_embedding=query_embedding,
-                user_id=user_id,
-                project_id=project_id,
-                session_id=session_id,  # Pass session_id for isolation
-                match_count=match_count,
-                similarity_threshold=similarity_threshold
-            )
-    
-    async def _get_similar_global_knowledge_impl(
+    async def get_similar_global_knowledge(
         self,
         query_embedding: List[float],
         match_count: int = 5,
@@ -219,7 +130,16 @@ class VectorStorageService:
         min_quality_score: float = 0.6
     ) -> List[Dict[str, Any]]:
         """
-        Internal implementation of global knowledge retrieval
+        Retrieve similar patterns from global knowledge base
+        
+        Args:
+            query_embedding: Query embedding vector
+            match_count: Maximum number of results
+            similarity_threshold: Minimum similarity score (0-1)
+            min_quality_score: Minimum quality score (0-1)
+            
+        Returns:
+            List of similar knowledge patterns with similarity scores
         """
         try:
             result = self.supabase.rpc(
@@ -242,60 +162,6 @@ class VectorStorageService:
         except Exception as e:
             print(f"ERROR: Failed to retrieve similar global knowledge: {e}")
             return []
-    
-    async def get_similar_global_knowledge(
-        self,
-        query_embedding: List[float],
-        match_count: int = 5,
-        similarity_threshold: float = 0.7,
-        min_quality_score: float = 0.6,
-        parent_run_tree: Optional["RunTree"] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Retrieve similar patterns from global knowledge base
-        
-        Args:
-            query_embedding: Query embedding vector
-            match_count: Maximum number of results
-            similarity_threshold: Minimum similarity score (0-1)
-            min_quality_score: Minimum quality score (0-1)
-            parent_run_tree: Optional parent run tree for explicit context propagation
-            
-        Returns:
-            List of similar knowledge patterns with similarity scores
-        """
-        # Use tracing_context with explicit parent for async functions
-        if LANGSMITH_AVAILABLE and tracing_context:
-            trace_kwargs = {
-                "project_name": LANGSMITH_PROJECT,
-                "name": "VectorStoreRetriever_global_knowledge",
-                "run_type": "retriever",
-                "tags": ["rag", "vector_search", "retrieval"],
-                "metadata": {
-                    "match_count": match_count,
-                    "similarity_threshold": similarity_threshold,
-                    "min_quality_score": min_quality_score,
-                    "embedding_dimension": len(query_embedding) if query_embedding else 0
-                }
-            }
-            # Pass parent run tree explicitly if provided
-            if parent_run_tree is not None:
-                trace_kwargs["parent"] = parent_run_tree
-            
-            with tracing_context(**trace_kwargs):
-                return await self._get_similar_global_knowledge_impl(
-                    query_embedding=query_embedding,
-                    match_count=match_count,
-                    similarity_threshold=similarity_threshold,
-                    min_quality_score=min_quality_score
-                )
-        else:
-            return await self._get_similar_global_knowledge_impl(
-                query_embedding=query_embedding,
-                match_count=match_count,
-                similarity_threshold=similarity_threshold,
-                min_quality_score=min_quality_score
-            )
     
     async def store_global_knowledge(
         self,
@@ -424,14 +290,6 @@ class VectorStorageService:
             ID of the created embedding record
         """
         try:
-            # If Supabase is not available, generate embedding ID but warn that storage is disabled
-            if not self.supabase:
-                embedding_id = uuid4()
-                print(f"⚠️ Supabase not configured - embedding generated for asset {asset_id}, chunk {chunk_index} but not stored")
-                print(f"⚠️ RAG retrieval will not work until Supabase is configured with vector storage tables")
-                print(f"✅ Embedding ID generated: {embedding_id}")
-                return embedding_id
-            
             embedding_data = {
                 "embedding_id": str(uuid4()),
                 "asset_id": str(asset_id),

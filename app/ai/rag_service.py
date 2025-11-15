@@ -1,26 +1,13 @@
 """
 RAG (Retrieval Augmented Generation) Service
-Uses LangChain retrievers for automatic LangSmith tracing
+Combines embedding generation, vector search, and context building for LLM prompts
 """
 
-import os
 from typing import List, Dict, Any, Optional
 from uuid import UUID
-
-# Use manual tracing with @traceable (LangChain too large for Vercel)
 from .embedding_service import get_embedding_service
 from .vector_storage import vector_storage
 from .document_processor import document_processor
-
-# LangSmith integration (for parent traces)
-try:
-    from .langsmith_config import create_trace
-    LANGSMITH_AVAILABLE = True
-except ImportError:
-    LANGSMITH_AVAILABLE = False
-    def create_trace(*args, **kwargs):
-        from contextlib import nullcontext
-        return nullcontext()
 
 
 class RAGService:
@@ -34,10 +21,10 @@ class RAGService:
         self.user_context_weight = 0.4  # 40% weight on user-specific context
         self.global_context_weight = 0.3  # 30% weight on global patterns (includes image analysis)
         self.document_context_weight = 0.3  # 30% weight on document context
-        self.user_match_count = 6  # Retrieve top 6 similar user messages
-        self.global_match_count = 3  # Retrieve top 3 global patterns (increased for image analysis)
-        self.document_match_count = 3  # Retrieve top 3 document chunks
-        self.similarity_threshold = 0.1  # Very low threshold for testing
+        self.user_match_count = 15  # Retrieve more user messages for stronger continuity
+        self.global_match_count = 5  # A few more global patterns
+        self.document_match_count = 6  # Broaden document context (images/docs)
+        self.similarity_threshold = 0.05  # Broader net to avoid misses
     
     def _get_embedding_service(self):
         """Lazy initialization of embedding service"""
@@ -45,91 +32,11 @@ class RAGService:
             self.embedding_service = get_embedding_service()
         return self.embedding_service
     
-    def _expand_brand_query(self, query: str) -> str:
-        """
-        Expand queries to include relevant keywords based on document use cases
-        This helps match against the right brand documents (Avatar Sheet, Script guides, etc.)
-        
-        Args:
-            query: Original user query
-            
-        Returns:
-            Expanded query with relevant keywords for document matching
-        """
-        query_lower = query.lower()
-        
-        # Map queries to specific document types
-        # Avatar Sheet / ICP queries - EXPANDED
-        if any(phrase in query_lower for phrase in [
-            "who are my", "who is my", "my niche", "my audience", "my target", "potential clients",
-            "ideal customer", "target audience", "who do i", "who should i", "who are", "client",
-            "customer", "people i", "people who", "demographics", "psychographics"
-        ]):
-            return f"{query} avatar sheet ICP ideal customer profile target audience potential clients niche demographics psychographics client profile audience behavior emotional patterns"
-        
-        # Script/Storytelling queries - EXPANDED
-        if any(phrase in query_lower for phrase in [
-            "script", "hook", "cta", "story", "video", "content", "create", "write", "generate",
-            "reel", "tiktok", "short", "caption", "post", "social media", "storytelling"
-        ]):
-            return f"{query} script structure hook formulas CTA call to action storytelling rules content creation video script short form content retention blueprint"
-        
-        # Tone/Style queries - Make more specific to match brand documents
-        if any(phrase in query_lower for phrase in [
-            "tone", "voice", "style", "how do i write", "writing style", "how should i", "my tone", "my voice", "my style",
-            "how to write", "writing", "messaging", "language", "brand voice"
-        ]):
-            return f"{query} Simon brand tone voice writing style brand identity north star brand vision Fit For Life Coaching brand philosophy messaging rules calm authority grounded intelligent emotionally honest"
-        
-        # Content strategy queries - EXPANDED
-        if any(phrase in query_lower for phrase in [
-            "content strategy", "weekly", "ideas", "plan", "calendar", "content plan", "content ideas",
-            "what to post", "posting", "schedule", "content calendar", "content pillars"
-        ]):
-            return f"{query} content strategy content pillars weekly planning content ideas posting schedule content calendar purple cow content blueprint"
-        
-        # Carousel queries - EXPANDED
-        if any(phrase in query_lower for phrase in [
-            "carousel", "slides", "post", "instagram post", "carousel post", "slide deck"
-        ]):
-            return f"{query} carousel rules carousel structure slides headline carousel creation rules"
-        
-        # Competitor analysis queries
-        if any(phrase in query_lower for phrase in [
-            "competitor", "competition", "analyze", "rewrite", "rewrite in my", "in my voice", "in my tone"
-        ]):
-            return f"{query} competitor analysis rewrite brand voice tone storytelling style Simon Fit For Life Coaching"
-        
-        # Brand/Identity queries - EXPANDED
-        if any(phrase in query_lower for phrase in [
-            "brand", "identity", "positioning", "philosophy", "mission", "values", "what we stand for"
-        ]):
-            return f"{query} brand identity north star brand vision Fit For Life Coaching brand philosophy mission values positioning"
-        
-        # Personal description queries
-        if any(phrase in query_lower for phrase in [
-            "tell me about yourself", "about you", "your story", "your background", "who are you",
-            "your journey", "your experience"
-        ]):
-            return f"{query} Simon personal description background story journey experience childhood struggles transformation"
-        
-        # General personal/brand queries - EXPANDED
-        if any(phrase in query_lower for phrase in [
-            "what do you know about me", "who am i", "what's my", "what is my",
-            "tell me about me", "my brand", "what are my", "how do i", "how should i"
-        ]):
-            return f"{query} niche target audience ICP ideal customer profile brand identity tone voice writing style content pillars storytelling rules hook formulas CTA call to action brand documents"
-        
-        # If no specific match, still add brand keywords for better document matching
-        # This ensures even generic queries can find relevant brand documents
-        return f"{query} Fit For Life Coaching brand documents content strategy"
-    
     async def get_rag_context(
         self,
         user_message: str,
         user_id: UUID,
         project_id: Optional[UUID] = None,
-        session_id: Optional[UUID] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None
     ) -> Dict[str, Any]:
         """
@@ -139,7 +46,6 @@ class RAGService:
             user_message: Current user message
             user_id: ID of the user
             project_id: Optional project ID
-            session_id: Optional session ID for session isolation (CRITICAL: filters messages to current session only)
             conversation_history: Optional recent conversation history
             
         Returns:
@@ -149,136 +55,100 @@ class RAGService:
             - combined_context_text: Formatted context for LLM prompt
             - metadata: Metadata about retrieval
         """
-        # LangSmith tracing for RAG operations
-        # Get parent run tree for explicit context propagation
         try:
-            from langsmith import get_current_run_tree
-            parent_run_tree = get_current_run_tree()
-        except (ImportError, Exception):
-            parent_run_tree = None
-        
-        with create_trace(
-            name="get_rag_context",
-            run_type="chain",
-            tags=["rag", "retrieval", "context_building"],
-            metadata={
-                "user_id": str(user_id),
-                "project_id": str(project_id) if project_id else None,
-                "user_message_length": len(user_message),
-                "has_conversation_history": bool(conversation_history),
-                "conversation_history_length": len(conversation_history) if conversation_history else 0
-            }
-        ):
-            # Get current run tree for this trace to pass to child functions
-            try:
-                from langsmith import get_current_run_tree
-                rag_run_tree = get_current_run_tree()
-            except (ImportError, Exception):
-                rag_run_tree = None
+            print(f"RAG: Building context for user {user_id}")
             
+            # Step 1: Generate query embedding (include conversation context if available)
+            if conversation_history:
+                # Combine recent conversation for better context
+                recent_context = "\n".join([
+                    f"{msg.get('role', 'user')}: {msg.get('content', '')}"
+                    for msg in conversation_history[-5:]  # include last 5 turns
+                ])
+                query_text = f"{recent_context}\nUser: {user_message}"
+            else:
+                query_text = user_message
+            
+            query_embedding = await self._get_embedding_service().generate_query_embedding(query_text)
+            
+            # Step 2: Retrieve user-specific context
+            user_context = await self.vector_storage.get_similar_user_messages(
+                query_embedding=query_embedding,
+                user_id=user_id,
+                project_id=project_id,
+                match_count=self.user_match_count,
+                similarity_threshold=self.similarity_threshold
+            )
+            
+            # Step 3: Retrieve global knowledge patterns
+            global_context = await self.vector_storage.get_similar_global_knowledge(
+                query_embedding=query_embedding,
+                match_count=self.global_match_count,
+                similarity_threshold=self.similarity_threshold,
+                min_quality_score=0.6
+            )
+            
+            # Step 4: Debug - Check if there are any document embeddings for this user
             try:
-                print(f"RAG: Building context for user {user_id}")
+                from app.database.supabase import get_supabase_client
+                supabase = get_supabase_client()
+                print(f"🔍 RAG Debug: Querying for user_id: {str(user_id)} (type: {type(user_id)})")
+                debug_result = supabase.table('document_embeddings').select('*').eq('user_id', str(user_id)).execute()
+                print(f"🔍 RAG Debug: Found {len(debug_result.data)} document embeddings for user {user_id}")
                 
-                # Step 1: Generate query embedding (include conversation context if available)
-                # CRITICAL: Expand generic queries about "me" or "my" to include brand-related keywords
-                # This helps match against brand documents (niche, ICP, tone, etc.) instead of irrelevant docs
-                expanded_query = self._expand_brand_query(user_message)
+                # Also check all embeddings to see what's in the database
+                all_embeddings = supabase.table('document_embeddings').select('user_id, asset_id, project_id').execute()
+                print(f"🔍 RAG Debug: Total embeddings in database: {len(all_embeddings.data)}")
+                for row in all_embeddings.data:
+                    print(f"  - User: {row.get('user_id')}, Asset: {row.get('asset_id')}, Project: {row.get('project_id')}")
                 
-                if conversation_history:
-                    # Combine recent conversation for better context
-                    recent_context = "\n".join([
-                        f"{msg.get('role', 'user')}: {msg.get('content', '')}"
-                        for msg in conversation_history[-3:]
-                    ])
-                    query_text = f"{recent_context}\nUser: {expanded_query}"
-                else:
-                    query_text = expanded_query
-                
-                # Step 2: Generate query embedding
-                query_embedding = await self._get_embedding_service().generate_query_embedding(query_text)
-                
-                # Step 3: Retrieve user-specific context (with explicit parent run tree)
-                # CRITICAL: Pass session_id to ensure session isolation - only get messages from current session
-                user_context = await self.vector_storage.get_similar_user_messages(
-                    query_embedding=query_embedding,
-                    user_id=user_id,
-                    project_id=project_id,
-                    session_id=session_id,  # NEW: Filter by session for isolation
-                    match_count=self.user_match_count,
-                    similarity_threshold=self.similarity_threshold,
-                    parent_run_tree=rag_run_tree
-                )
-                
-                # Step 4: Retrieve global knowledge patterns (with explicit parent run tree)
-                global_context = await self.vector_storage.get_similar_global_knowledge(
-                    query_embedding=query_embedding,
-                    match_count=self.global_match_count,
-                    similarity_threshold=self.similarity_threshold,
-                    min_quality_score=0.6,
-                    parent_run_tree=rag_run_tree
-                )
-                
-                # Step 5: Retrieve document context (with explicit parent run tree)
-                print(f"[RAG] Calling get_document_context")
-                document_context = []
-                try:
-                    print(f"[RAG] Starting document retrieval...")
-                    # Increase match_count for better coverage, especially for brand questions
-                    document_context = await document_processor.get_document_context(
-                        query_embedding=query_embedding,
-                        user_id=user_id,
-                        project_id=project_id,
-                        match_count=15,  # Increased from 10 to get more relevant chunks
-                        similarity_threshold=0.1,
-                        parent_run_tree=rag_run_tree
-                    )
-                    print(f"[OK] [RAG] Retrieved {len(document_context)} document chunks")
-                except Exception as doc_error:
-                    print(f"[X] [RAG] Error retrieving document context: {doc_error}")
-                    import traceback
-                    print(traceback.format_exc())
-                    document_context = []
-                
-                # Step 6: Build combined context text for LLM prompt
-                combined_context_text = self._format_rag_context(user_context, global_context, document_context)
-                
-                # Step 7: Build metadata
-                metadata = {
-                    "user_context_count": len(user_context),
-                    "global_context_count": len(global_context),
-                    "document_context_count": len(document_context),
-                    "query_length": len(user_message),
-                    "has_conversation_history": bool(conversation_history)
-                }
-                
-                print(f"[STATS] [RAG] Final summary: {len(user_context)} user contexts, {len(global_context)} global patterns, {len(document_context)} document chunks")
-                print(f"[STATS] [RAG] Combined context text length: {len(combined_context_text)} chars")
-                if combined_context_text:
-                    print(f"[STATS] [RAG] Combined context preview (first 300 chars): {combined_context_text[:300]}...")
-                if document_context:
-                    print(f"[OK] [RAG] SUCCESS: Document context will be included in AI prompt!")
-                    print(f"[OK] [RAG] Document chunks in context: {len(document_context)}")
-                else:
-                    print(f"[WARN] [RAG] WARNING: No document context retrieved - AI won't have document information")
-                
-                return {
-                    "user_context": user_context,
-                    "global_context": global_context,
-                    "document_context": document_context,
-                    "combined_context_text": combined_context_text,
-                    "metadata": metadata
-                }
+                if debug_result.data:
+                    for row in debug_result.data:
+                        print(f"  - Asset: {row.get('asset_id')}, Project: {row.get('project_id')}, Type: {row.get('document_type')}")
             except Exception as e:
-                print(f"ERROR: Failed to get RAG context: {e}")
-                import traceback
-                print(traceback.format_exc())
-                return {
-                    "user_context": [],
-                    "global_context": [],
-                    "document_context": [],
-                    "combined_context_text": "",
-                    "metadata": {"error": str(e)}
-                }
+                print(f"🔍 RAG Debug: Error checking embeddings: {e}")
+            
+            # Step 4: Retrieve document context (search across all projects for user)
+            print(f"🔍 RAG: Calling get_document_context with user_id: {user_id} (type: {type(user_id)})")
+            document_context = await document_processor.get_document_context(
+                query_embedding=query_embedding,
+                user_id=user_id,
+                project_id=None,  # Search across all projects for this user
+                match_count=self.document_match_count,
+                similarity_threshold=self.similarity_threshold
+            )
+            
+            # Step 5: Build combined context text for LLM prompt
+            combined_context_text = self._format_rag_context(user_context, global_context, document_context)
+            
+            # Step 6: Build metadata
+            metadata = {
+                "user_context_count": len(user_context),
+                "global_context_count": len(global_context),
+                "document_context_count": len(document_context),
+                "query_length": len(user_message),
+                "has_conversation_history": bool(conversation_history)
+            }
+            
+            print(f"RAG: Retrieved {len(user_context)} user contexts, {len(global_context)} global patterns, {len(document_context)} document chunks")
+            
+            return {
+                "user_context": user_context,
+                "global_context": global_context,
+                "document_context": document_context,
+                "combined_context_text": combined_context_text,
+                "metadata": metadata
+            }
+            
+        except Exception as e:
+            print(f"ERROR: Failed to get RAG context: {e}")
+            return {
+                "user_context": [],
+                "global_context": [],
+                "document_context": [],
+                "combined_context_text": "",
+                "metadata": {"error": str(e)}
+            }
     
     def _format_rag_context(
         self,
@@ -309,46 +179,16 @@ class RAGService:
                 context_parts.append(f"{i}. [{role.upper()}] (relevance: {similarity:.2f}) {content[:200]}...")
             context_parts.append("")
         
-        # Add document context - CRITICAL: This is the brand documents (North Star, ICP, rules, etc.)
+        # Add document context
         if document_context:
-            context_parts.append("## 🔴 BRAND DOCUMENTS - CRITICAL INFORMATION:")
-            context_parts.append("")
-            context_parts.append("YOU MUST USE THIS INFORMATION TO ANSWER ALL QUESTIONS ABOUT:")
-            context_parts.append("- Brand identity, niche, target audience, potential clients")
-            context_parts.append("- Tone, voice, writing style, sentence rhythm, emotional pacing")
-            context_parts.append("- Storytelling rules, hook formulas, content pillars")
-            context_parts.append("- Script structure, CTA formats, carousel rules")
-            context_parts.append("- Audience fears, desires, struggles")
-            context_parts.append("")
-            context_parts.append("DOCUMENT USE CASES:")
-            context_parts.append("- Avatar Sheet / ICP Document: Use for questions about potential clients, target audience, niche")
-            context_parts.append("- Script/Storytelling Documents: Use for script creation, hooks, CTAs, storytelling structure")
-            context_parts.append("- Content Strategy Documents: Use for content ideas, weekly planning, content pillars")
-            context_parts.append("- Carousel Documents: Use for carousel creation rules and structure")
-            context_parts.append("- North Star / Brand Vision: Use for brand identity, tone, voice, overall approach")
-            context_parts.append("")
-            context_parts.append("WHEN ANSWERING QUESTIONS:")
-            context_parts.append("1. If asked about niche/clients/audience → Use Avatar Sheet / ICP document")
-            context_parts.append("2. If asked to create scripts → Use Script/Storytelling documents for structure and rules")
-            context_parts.append("3. If asked about tone/style → Use North Star / Brand Vision documents")
-            context_parts.append("4. If asked about content strategy → Use Content Strategy documents")
-            context_parts.append("5. ALWAYS apply the rules and guidelines from these documents to your outputs")
-            context_parts.append("")
-            context_parts.append("DOCUMENT CONTENT:")
+            context_parts.append("## Relevant Information from Your Uploaded Documents:")
             for i, item in enumerate(document_context, 1):
                 doc_type = item.get('document_type', 'unknown')
                 chunk_text = item.get('chunk_text', '')
                 similarity = item.get('similarity', 0)
-                metadata = item.get('metadata', {})
-                filename = metadata.get('filename', 'Unknown Document')
-                
-                # Include document filename to help AI understand which document this is
-                context_parts.append(f"--- Document {i}: {filename} ({doc_type.upper()}, relevance: {similarity:.2f}) ---")
-                # Include MORE chunk text for better context (up to 1000 chars for brand docs)
-                context_parts.append(chunk_text[:1000])
-                context_parts.append("")
-            context_parts.append("")
-            context_parts.append("REMEMBER: This information is from Simon's uploaded brand documents. Use it directly to answer questions.")
+                context_parts.append(
+                    f"{i}. [{doc_type.upper()}] (relevance: {similarity:.2f}) {chunk_text[:200]}..."
+                )
             context_parts.append("")
         
         # Add global knowledge context
@@ -394,41 +234,27 @@ class RAGService:
         Returns:
             True if successful, False otherwise
         """
-        # LangSmith tracing
-        with create_trace(
-            name="embed_and_store_message",
-            run_type="chain",
-            tags=["rag", "embedding", "storage"],
-            metadata={
-                "message_id": str(message_id),
-                "user_id": str(user_id),
-                "project_id": str(project_id),
-                "session_id": str(session_id),
-                "role": role,
-                "content_length": len(content)
-            }
-        ):
-            try:
-                # Generate embedding
-                embedding = await self._get_embedding_service().generate_embedding(content)
-                
-                # Store embedding
-                embedding_id = await self.vector_storage.store_message_embedding(
-                    message_id=message_id,
-                    user_id=user_id,
-                    project_id=project_id,
-                    session_id=session_id,
-                    embedding=embedding,
-                    content=content,
-                    role=role,
-                    metadata=metadata
-                )
-                
-                return embedding_id is not None
-                
-            except Exception as e:
-                print(f"ERROR: Failed to embed and store message: {e}")
-                return False
+        try:
+            # Generate embedding
+            embedding = await self._get_embedding_service().generate_embedding(content)
+            
+            # Store embedding
+            embedding_id = await self.vector_storage.store_message_embedding(
+                message_id=message_id,
+                user_id=user_id,
+                project_id=project_id,
+                session_id=session_id,
+                embedding=embedding,
+                content=content,
+                role=role,
+                metadata=metadata
+            )
+            
+            return embedding_id is not None
+            
+        except Exception as e:
+            print(f"ERROR: Failed to embed and store message: {e}")
+            return False
     
     async def extract_and_store_knowledge(
         self,
@@ -445,55 +271,44 @@ class RAGService:
             user_id: ID of the user (for attribution, not stored in global KB)
             project_id: ID of the project
         """
-        # LangSmith tracing
-        with create_trace(
-            name="extract_and_store_knowledge",
-            run_type="chain",
-            tags=["rag", "knowledge_extraction", "storage"],
-            metadata={
-                "user_id": str(user_id),
-                "project_id": str(project_id),
-                "conversation_length": len(conversation)
-            }
-        ):
-            try:
-                print(f"RAG: Extracting knowledge from conversation (user: {user_id})")
-                
-                # Analyze conversation for patterns
-                # This is a simplified version - you can make this more sophisticated
-                
-                # Example: Extract character development patterns
-                character_mentions = self._extract_character_patterns(conversation)
-                for char_pattern in character_mentions:
-                    embedding = await self._get_embedding_service().generate_embedding(char_pattern['text'])
-                    await self.vector_storage.store_global_knowledge(
-                        category='character',
-                        pattern_type='character_development',
-                        embedding=embedding,
-                        example_text=char_pattern['text'],
-                        description=char_pattern.get('description'),
-                        quality_score=0.7,
-                        tags=['conversation_extracted']
-                    )
-                
-                # Example: Extract plot patterns
-                plot_patterns = self._extract_plot_patterns(conversation)
-                for plot_pattern in plot_patterns:
-                    embedding = await self._get_embedding_service().generate_embedding(plot_pattern['text'])
-                    await self.vector_storage.store_global_knowledge(
-                        category='plot',
-                        pattern_type='story_arc',
-                        embedding=embedding,
-                        example_text=plot_pattern['text'],
-                        description=plot_pattern.get('description'),
-                        quality_score=0.7,
-                        tags=['conversation_extracted']
-                    )
-                
-                print(f"RAG: Extracted {len(character_mentions)} character patterns, {len(plot_patterns)} plot patterns")
-                
-            except Exception as e:
-                print(f"ERROR: Failed to extract and store knowledge: {e}")
+        try:
+            print(f"RAG: Extracting knowledge from conversation (user: {user_id})")
+            
+            # Analyze conversation for patterns
+            # This is a simplified version - you can make this more sophisticated
+            
+            # Example: Extract character development patterns
+            character_mentions = self._extract_character_patterns(conversation)
+            for char_pattern in character_mentions:
+                embedding = await self._get_embedding_service().generate_embedding(char_pattern['text'])
+                await self.vector_storage.store_global_knowledge(
+                    category='character',
+                    pattern_type='character_development',
+                    embedding=embedding,
+                    example_text=char_pattern['text'],
+                    description=char_pattern.get('description'),
+                    quality_score=0.7,
+                    tags=['conversation_extracted']
+                )
+            
+            # Example: Extract plot patterns
+            plot_patterns = self._extract_plot_patterns(conversation)
+            for plot_pattern in plot_patterns:
+                embedding = await self._get_embedding_service().generate_embedding(plot_pattern['text'])
+                await self.vector_storage.store_global_knowledge(
+                    category='plot',
+                    pattern_type='story_arc',
+                    embedding=embedding,
+                    example_text=plot_pattern['text'],
+                    description=plot_pattern.get('description'),
+                    quality_score=0.7,
+                    tags=['conversation_extracted']
+                )
+            
+            print(f"RAG: Extracted {len(character_mentions)} character patterns, {len(plot_patterns)} plot patterns")
+            
+        except Exception as e:
+            print(f"ERROR: Failed to extract and store knowledge: {e}")
     
     def _extract_character_patterns(self, conversation: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """Extract character-related patterns from conversation"""

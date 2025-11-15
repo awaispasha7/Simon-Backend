@@ -44,13 +44,13 @@ class DossierExtractor:
             for msg in conversation_history
         ])
         
-        # Extraction prompt - Updated to match client requirements
+        # Extraction prompt - Extended to include logline, characters[], scenes[]
         extraction_prompt = f"""Based on this conversation about a story, extract structured metadata following the client's slot-based framework.
 
 Conversation:
 {context}
 
-Extract the following information (use "Unknown" if not mentioned):
+Extract the following information (use "Unknown" if not mentioned). Always include all keys. If something is not present, use empty string for strings and [] for arrays.
 
 STORY FRAME (Frame-first approach):
 1. story_timeframe: When does the story take place?
@@ -73,9 +73,17 @@ STORY CRAFT:
 TECHNICAL:
 13. runtime: Estimated runtime (3-5 minutes)
 14. title: Working title (if mentioned)
+15. logline: Single-sentence premise (if implied)
+
+CHARACTERS (array; include key even if empty):
+- name, description, role (e.g., protagonist/mentor)
+
+SCENES (array; include key even if empty):
+- one_liner (short beat/scene summary)
+- Optional: time_of_day, interior_exterior, tone
 
 Respond ONLY with valid JSON in this exact format:
-{{
+{{{{
     "story_timeframe": "string",
     "story_location": "string", 
     "story_world_type": "Real/Invented-in-our-world/Invented-other-world",
@@ -89,8 +97,11 @@ Respond ONLY with valid JSON in this exact format:
     "outcome": "string",
     "likes_in_story": "string",
     "runtime": "3-5 minutes",
-    "title": "string"
-}}"""
+    "title": "string",
+    "logline": "string",
+    "characters": [{{"name": "string", "description": "string", "role": "string"}}],
+    "scenes": [{{"one_liner": "string", "time_of_day": "string", "interior_exterior": "string", "tone": "string"}}]
+}}}}"""
 
         try:
             # Call OpenAI to extract metadata
@@ -148,83 +159,11 @@ Respond ONLY with valid JSON in this exact format:
                 "outcome": "Unknown",
                 "likes_in_story": "Unknown",
                 "runtime": "3-5 minutes",
-                "title": "Untitled Story"
+                "title": "Untitled Story",
+                "logline": "",
+                "characters": [],
+                "scenes": []
             }
-    
-    async def should_update_dossier(self, conversation_history: list) -> bool:
-        """
-        Use LLM to intelligently determine if we should update the dossier based on conversation
-        
-        Args:
-            conversation_history: List of messages
-        
-        Returns:
-            bool: True if dossier should be updated
-        """
-        print(f"🔍 LLM checking if dossier should update. History length: {len(conversation_history)}")
-        
-        # Ensure we're initialized
-        self._ensure_initialized()
-        
-        # Build conversation context
-        context = "\n".join([
-            f"{msg['role'].upper()}: {msg['content']}"
-            for msg in conversation_history
-        ])
-        
-        # LLM decision prompt
-        decision_prompt = f"""You are analyzing a story development conversation to determine if the dossier should be updated.
-
-Conversation:
-{context}
-
-Based on this conversation, should the story dossier be updated? Consider:
-1. Did the user provide new story information (characters, plot, setting, genre, etc.)?
-2. Did the user reveal important story details that should be captured?
-3. Is there meaningful story content that wasn't in previous updates?
-
-Respond with ONLY "YES" if the dossier should be updated, or "NO" if it shouldn't.
-
-Decision:"""
-
-        try:
-            # Call OpenAI to make the decision
-            response = openai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a story analysis expert. Analyze conversations and decide if story information should be captured in a dossier. Respond with only YES or NO."
-                    },
-                    {
-                        "role": "user",
-                        "content": decision_prompt
-                    }
-                ],
-                temperature=0.1,  # Very low temperature for consistent decisions
-                max_completion_tokens=10
-            )
-            
-            # Parse the response
-            decision = response.choices[0].message.content.strip().upper()
-            should_update = decision == "YES"
-            
-            print(f"🔍 LLM decision: {decision} -> Should update: {should_update}")
-            return should_update
-            
-        except Exception as e:
-            print(f"❌ Error in LLM dossier decision: {str(e)}")
-            # Fallback: update if there are user messages with story content
-            user_messages = [msg for msg in conversation_history if msg.get("role") == "user"]
-            if user_messages:
-                last_user_message = user_messages[-1].get("content", "").lower()
-                story_keywords = ["character", "story", "plot", "main", "name", "called", "named", "wife", "husband"]
-                has_story_content = any(keyword in last_user_message for keyword in story_keywords)
-                print(f"🔍 Fallback decision: {has_story_content}")
-                return has_story_content
-            
-            print(f"🔍 Fallback: Not updating dossier")
-            return False
 
 
 # Global instance - safe to create since we use lazy initialization
