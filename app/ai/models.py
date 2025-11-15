@@ -32,6 +32,14 @@ except ImportError as e:
     print(f"Warning: Anthropic not available: {e}")
     ANTHROPIC_AVAILABLE = False
 
+# Web search integration
+try:
+    from .web_search import web_search_service
+    WEB_SEARCH_AVAILABLE = True
+except ImportError:
+    WEB_SEARCH_AVAILABLE = False
+    web_search_service = None
+
 class TaskType(Enum):
     """Task types for AI model selection"""
     CHAT = "chat"
@@ -64,11 +72,51 @@ class AIModelManager:
 
         # Model selection mapping - using latest recommended models
         self.model_mapping = {
-            TaskType.CHAT: "gpt-4.1-mini",  # Best price-to-quality for high-traffic chat
+            TaskType.CHAT: "gpt-4o-mini",  # Best price-to-quality for high-traffic chat
             TaskType.DESCRIPTION: "gemini-2.5-pro",  # Latest Pro tier for creative reasoning
             TaskType.SCRIPT: "claude-sonnet-4-5-20250929",  # Latest Claude Sonnet 4.5 (per Anthropic API docs)
             TaskType.SCENE: "gpt-4.1",  # Flagship for deep text generation
         }
+    
+    def _get_web_search_function(self, user_query: str = None) -> Optional[Dict[str, Any]]:
+        """Get function definition for web search if available"""
+        if not WEB_SEARCH_AVAILABLE or not web_search_service or not web_search_service.is_enabled():
+            return None
+        
+        # When user explicitly enables web search, use their query directly
+        if user_query:
+            description = f"Search the internet for current information about: '{user_query}'. The user has explicitly enabled web search. You MUST use their exact query or a very close variation to get the latest and most relevant information from the web. Use this search to validate and enhance your response with current, factual information."
+            query_description = f"Use the user's query directly: '{user_query}'. You may add recency terms like 'latest' or the current year if helpful, but keep the core query intact."
+        else:
+            description = "Search the internet for current information, facts, news, or data. Use the user's exact query to get the latest and most relevant information from the web. ALWAYS use the user's input as the search query to validate and enhance your response with current information."
+            query_description = "The search query. Use the user's input directly, or construct a query based on what the user is asking about."
+        
+        return {
+            "type": "function",
+            "function": {
+                "name": "internet_search",
+                "description": description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": query_description
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        }
+    
+    def _should_force_search(self, prompt: str) -> bool:
+        """Check if web search should be forced based on explicit user triggers"""
+        prompt_lower = prompt.lower()
+        search_keywords = [
+            "search for", "look up", "find information about", "search:", 
+            "internet search", "web search", "google", "search the web"
+        ]
+        return any(keyword in prompt_lower for keyword in search_keywords)
     
     def _build_conversation_context(self, conversation_history: list, image_context: str = "") -> str:
         """Build conversation context for the system prompt"""
@@ -419,22 +467,176 @@ class AIModelManager:
             
             print(f"🤖 [AI] Selected model: {model_name} ({'vision-capable' if image_data_list else 'text-only'})")
 
-            response = openai.chat.completions.create(
-                model=model_name,  # Use GPT-4o for vision, GPT-4o-mini for text-only
-                messages=messages,
-                max_completion_tokens=kwargs.get("max_tokens", 600),  # Increased for multi-image, richer context
-                temperature=0.7,
-                top_p=1.0,  # Standard value for balanced creativity
-                n=1,  # Single response
-                stream=False,  # Non-streaming for API consistency
-                presence_penalty=0.0,  # No penalty for topic repetition
-                frequency_penalty=0.0  # No penalty for word repetition
-            )
+            # Check if web search is explicitly disabled
+            enable_web_search = kwargs.get("enable_web_search")
             
-            print(f"✅ OpenAI response received: {response}")
+            if enable_web_search is False:
+                # User explicitly disabled web search
+                tools = None
+                tool_choice = None
+                print(f"🔍 [WebSearch] Web search disabled by user")
+            elif enable_web_search is True:
+                # User explicitly enabled web search - ALWAYS search using their query
+                web_search_function = self._get_web_search_function(user_query=prompt)
+                tools = [web_search_function] if web_search_function else None
+                
+                if tools:
+                    # Force search by requiring the function to be called with user's query
+                    tool_choice = {"type": "function", "function": {"name": "internet_search"}}
+                    print(f"🔍 [WebSearch] Web search ENABLED by user - will search with query: '{prompt[:100]}...'")
+                else:
+                    tool_choice = None
+            else:
+                # enable_web_search is None - use default behavior (AI decides)
+                force_search = self._should_force_search(prompt)
+                web_search_function = self._get_web_search_function()
+                tools = [web_search_function] if web_search_function else None
+                
+                if tools:
+                    if force_search:
+                        # Force search by requiring the function to be called
+                        tool_choice = {"type": "function", "function": {"name": "internet_search"}}
+                        print(f"🔍 [WebSearch] Forcing web search due to explicit trigger")
+                    else:
+                        # Let AI decide when to search
+                        tool_choice = "auto"
+                        print(f"🔍 [WebSearch] Web search tool enabled - AI can search the internet when needed")
+                else:
+                    tool_choice = None
+
+            # Handle function calling in a loop (max 3 iterations to avoid infinite loops)
+            max_iterations = 3
+            iteration = 0
+            final_response = None
+            
+            while iteration < max_iterations:
+                iteration += 1
+                
+                # Prepare API call parameters
+                api_params = {
+                    "model": model_name,
+                    "messages": messages,
+                    "max_completion_tokens": kwargs.get("max_tokens", 6000),
+                    "temperature": 0.7,
+                    "top_p": 1.0,
+                    "n": 1,
+                    "stream": False,
+                    "presence_penalty": 0.0,
+                    "frequency_penalty": 0.0
+                }
+                
+                # Add tools if available
+                if tools:
+                    api_params["tools"] = tools
+                    api_params["tool_choice"] = tool_choice
+                
+                # Make API call
+                response = openai.chat.completions.create(**api_params)
+                
+                print(f"✅ OpenAI response received (iteration {iteration})")
+                
+                # Check if function calling is needed
+                message = response.choices[0].message
+                
+                # If no function calls, we're done
+                if not message.tool_calls:
+                    final_response = message.content
+                    break
+                
+                # Handle function calls
+                print(f"🔍 [WebSearch] Function call requested: {len(message.tool_calls)} call(s)")
+                
+                for tool_call in message.tool_calls:
+                    function_name = tool_call.function.name
+                    function_args = tool_call.function.arguments
+                    
+                    print(f"🔍 [WebSearch] Calling function: {function_name} with args: {function_args}")
+                    
+                    if function_name == "internet_search":
+                        import json
+                        try:
+                            args = json.loads(function_args) if isinstance(function_args, str) else function_args
+                            search_query = args.get("query", "")
+                            
+                            # If web search was explicitly enabled, prefer user's original query
+                            if enable_web_search is True and not search_query:
+                                search_query = prompt
+                                print(f"🔍 [WebSearch] Using user's original query as search query: '{search_query[:100]}...'")
+                            
+                            if search_query and web_search_service:
+                                print(f"🔍 [WebSearch] Searching for: {search_query}")
+                                # Always prioritize recent results when web search is enabled
+                                search_results = web_search_service.search(
+                                    search_query, 
+                                    max_results=5, 
+                                    prioritize_recent=True
+                                )
+                                
+                                # Format results for the model
+                                if search_results.get("success"):
+                                    formatted_results = web_search_service.format_search_results_for_context(search_results)
+                                    print(f"🔍 [WebSearch] Found {len(search_results.get('results', []))} results")
+                                    
+                                    # Add function result to messages
+                                    messages.append({
+                                        "role": "assistant",
+                                        "content": None,
+                                        "tool_calls": [
+                                            {
+                                                "id": tool_call.id,
+                                                "type": "function",
+                                                "function": {
+                                                    "name": function_name,
+                                                    "arguments": function_args
+                                                }
+                                            }
+                                        ]
+                                    })
+                                    
+                                    messages.append({
+                                        "role": "tool",
+                                        "tool_call_id": tool_call.id,
+                                        "content": formatted_results
+                                    })
+                                else:
+                                    error_msg = search_results.get("error", "Unknown error")
+                                    print(f"🔍 [WebSearch] Search failed: {error_msg}")
+                                    messages.append({
+                                        "role": "assistant",
+                                        "content": None,
+                                        "tool_calls": [
+                                            {
+                                                "id": tool_call.id,
+                                                "type": "function",
+                                                "function": {
+                                                    "name": function_name,
+                                                    "arguments": function_args
+                                                }
+                                            }
+                                        ]
+                                    })
+                                    messages.append({
+                                        "role": "tool",
+                                        "tool_call_id": tool_call.id,
+                                        "content": f"Search failed: {error_msg}"
+                                    })
+                        except Exception as e:
+                            print(f"🔍 [WebSearch] Error processing search: {e}")
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": f"Error: {str(e)}"
+                            })
+                
+                # Reset tool_choice for subsequent iterations (let AI decide)
+                tool_choice = "auto"
+            
+            if final_response is None:
+                # Fallback if we exhausted iterations
+                final_response = message.content if message.content else "I apologize, but I encountered an issue processing your request."
 
             return {
-                "response": response.choices[0].message.content,
+                "response": final_response,
                 "model_used": model_name,
                 "tokens_used": response.usage.total_tokens if response.usage else 0
             }

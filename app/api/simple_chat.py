@@ -511,7 +511,8 @@ async def chat(
                         project_id=project_id,
                         rag_context=rag_context,  # RAG context from documents
                         dossier_context=dossier_context,
-                        image_data=image_data_list  # Images sent directly (ChatGPT-style)
+                        image_data=image_data_list,  # Images sent directly (ChatGPT-style)
+                        enable_web_search=chat_request.enable_web_search
                     )
                     
                     # Get the response content
