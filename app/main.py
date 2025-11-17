@@ -132,8 +132,15 @@ if simple_session_manager:
     try:
         app.include_router(simple_session_manager.router, prefix="/api/v1", tags=["session"])
         print("SUCCESS: Simple session manager router included")
+        # Debug: Print all routes in the router
+        print(f"🔍 [DEBUG] Session router routes:")
+        for route in simple_session_manager.router.routes:
+            if hasattr(route, 'path') and hasattr(route, 'methods'):
+                print(f"  - {list(route.methods)} {route.path}")
     except Exception as e:
         print(f"ERROR: Error including simple session manager router: {e}")
+        import traceback
+        print(f"ERROR: Traceback: {traceback.format_exc()}")
 
 if simple_chat:
     try:
@@ -214,25 +221,7 @@ async def startup():
     print("CORS middleware configured")
     print("Application ready to serve requests")
 
-    # Start periodic cleanup of expired anonymous sessions/users
-    try:
-        from app.api.simple_session_manager import SimpleSessionManager
-
-        async def periodic_cleanup():
-            while True:
-                try:
-                    # Database cleanup (anonymize/delete) - run every 30 minutes
-                    await SimpleSessionManager.cleanup_expired_anonymous_sessions()
-                except Exception as cleanup_error:
-                    print(f"WARNING: Cleanup error: {cleanup_error}")
-                
-                # Run cleanup every 30 minutes
-                await asyncio.sleep(1800)
-
-        asyncio.create_task(periodic_cleanup())
-        print("SUCCESS: Started periodic anonymous cleanup task")
-    except Exception as schedule_error:
-        print(f"WARNING: Failed to start cleanup scheduler: {schedule_error}")
+    # Anonymous session cleanup removed - authentication required, no anonymous sessions
 
     # Start knowledge extraction worker
     try:

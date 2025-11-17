@@ -135,8 +135,7 @@ async def _send_completion_email(
 async def chat(
     chat_request: ChatRequest,
     x_user_id: Optional[str] = Header(None, alias="X-User-ID"),
-    x_session_id: Optional[str] = Header(None, alias="X-Session-ID"),
-    x_project_id: Optional[str] = Header(None, alias="X-Project-ID")
+    x_session_id: Optional[str] = Header(None, alias="X-Session-ID")
 ):
     """
     Simplified chat endpoint that works for both authenticated and anonymous users
@@ -153,13 +152,12 @@ async def chat(
         # Get or create session
         session_info = await SimpleSessionManager.get_or_create_session(
             session_id=x_session_id or chat_request.session_id,
-            user_id=UUID(x_user_id) if x_user_id else None,
-            project_id=UUID(x_project_id) if x_project_id else chat_request.project_id
+            user_id=UUID(x_user_id) if x_user_id else None
         )
         
         session_id = session_info["session_id"]
         user_id = session_info["user_id"]
-        project_id = session_info["project_id"]
+        project_id = None  # Projects removed - no longer supported
         is_authenticated = session_info["is_authenticated"]
         
         print(f"Chat request - Session: {session_id}, User: {user_id}, Authenticated: {is_authenticated}")
@@ -230,7 +228,6 @@ async def chat(
                 await rag_service.embed_and_store_message(
                     message_id=UUID(user_message_id),
                     user_id=rag_user_id,
-                    project_id=UUID(project_id) if project_id else None,
                     session_id=UUID(session_id),
                     content=chat_request.text,
                     role="user",
@@ -374,27 +371,23 @@ async def chat(
                             print(f"⚠️ Dossier retrieval error: {e}")
                     
                     # Get RAG context from uploaded documents
-                    # IMPORTANT: Use project_id to limit search to current project only
-                    # Each project = separate story with isolated context
-                    # Stories should be isolated - no cross-project character references
+                    # Projects no longer supported - search across all user documents
                     rag_context = None
                     if rag_service:
                         try:
                             if is_authenticated:
                                 # For authenticated users, use their actual user_id
                                 rag_user_id = UUID(user_id)
-                                print(f"🔍 Getting RAG context for user: {rag_user_id}, project: {project_id} (project-level isolation)")
+                                print(f"🔍 Getting RAG context for user: {rag_user_id}")
                             else:
-                                # For anonymous users, use the special anonymous user ID
-                                rag_user_id = UUID("00000000-0000-0000-0000-000000000000")
-                                print(f"🔍 Getting RAG context for anonymous user: {rag_user_id}, project: {project_id} (project-level isolation)")
+                                # Anonymous users no longer supported - this should not happen
+                                print(f"⚠️ RAG: Anonymous user detected but not supported")
+                                rag_context = None
+                                return
                             
-                            # Pass project_id to limit search to current project only
-                            # This ensures each story/project is isolated and independent
                             rag_context = await rag_service.get_rag_context(
                                 user_message=chat_request.text,
                                 user_id=rag_user_id,
-                                project_id=UUID(project_id) if project_id else None,  # Limit to current project
                                 conversation_history=conversation_history
                             )
                             print(f"📚 RAG context retrieved: {rag_context.get('user_context_count', 0)} user messages, {rag_context.get('document_context_count', 0)} document chunks")
@@ -611,7 +604,6 @@ async def chat(
                             await rag_service.embed_and_store_message(
                                 message_id=UUID(assistant_message_id),
                                 user_id=rag_user_id,
-                                project_id=UUID(project_id) if project_id else None,
                                 session_id=UUID(session_id),
                                 content=full_response,
                                 role="assistant",
@@ -762,7 +754,6 @@ async def chat(
                             await rag_service.embed_and_store_message(
                                 message_id=UUID(fallback_message_id),
                                 user_id=rag_user_id,
-                                project_id=UUID(project_id) if project_id else None,
                                 session_id=UUID(session_id),
                                 content=fallback_response,
                                 role="assistant",
@@ -927,7 +918,7 @@ async def _extract_and_store_attachment_analysis_from_response(
                         await vector_storage.store_document_embedding(
                             asset_id=UUID(asset_id),
                             user_id=UUID(user_id),
-                            project_id=UUID(project_id) if project_id else None,
+                            project_id=None,  # Projects no longer supported
                             document_type=file_type,
                             chunk_index=0,
                             chunk_text=embedding_text,

@@ -36,7 +36,6 @@ class RAGService:
         self,
         user_message: str,
         user_id: UUID,
-        project_id: Optional[UUID] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None
     ) -> Dict[str, Any]:
         """
@@ -45,7 +44,6 @@ class RAGService:
         Args:
             user_message: Current user message
             user_id: ID of the user
-            project_id: Optional project ID
             conversation_history: Optional recent conversation history
             
         Returns:
@@ -72,10 +70,11 @@ class RAGService:
             query_embedding = await self._get_embedding_service().generate_query_embedding(query_text)
             
             # Step 2: Retrieve user-specific context
+            # Search across all user messages (session_id=None) for broader context
             user_context = await self.vector_storage.get_similar_user_messages(
                 query_embedding=query_embedding,
                 user_id=user_id,
-                project_id=project_id,
+                session_id=None,  # Search across all sessions for broader context
                 match_count=self.user_match_count,
                 similarity_threshold=self.similarity_threshold
             )
@@ -97,23 +96,22 @@ class RAGService:
                 print(f"🔍 RAG Debug: Found {len(debug_result.data)} document embeddings for user {user_id}")
                 
                 # Also check all embeddings to see what's in the database
-                all_embeddings = supabase.table('document_embeddings').select('user_id, asset_id, project_id').execute()
+                all_embeddings = supabase.table('document_embeddings').select('user_id, asset_id, document_type').execute()
                 print(f"🔍 RAG Debug: Total embeddings in database: {len(all_embeddings.data)}")
                 for row in all_embeddings.data:
-                    print(f"  - User: {row.get('user_id')}, Asset: {row.get('asset_id')}, Project: {row.get('project_id')}")
+                    print(f"  - User: {row.get('user_id')}, Asset: {row.get('asset_id')}, Type: {row.get('document_type')}")
                 
                 if debug_result.data:
                     for row in debug_result.data:
-                        print(f"  - Asset: {row.get('asset_id')}, Project: {row.get('project_id')}, Type: {row.get('document_type')}")
+                        print(f"  - Asset: {row.get('asset_id')}, Type: {row.get('document_type')}")
             except Exception as e:
                 print(f"🔍 RAG Debug: Error checking embeddings: {e}")
             
-            # Step 4: Retrieve document context (search across all projects for user)
+            # Step 4: Retrieve document context (projects no longer supported)
             print(f"🔍 RAG: Calling get_document_context with user_id: {user_id} (type: {type(user_id)})")
             document_context = await document_processor.get_document_context(
                 query_embedding=query_embedding,
                 user_id=user_id,
-                project_id=None,  # Search across all projects for this user
                 match_count=self.document_match_count,
                 similarity_threshold=self.similarity_threshold
             )
@@ -213,7 +211,6 @@ class RAGService:
         self,
         message_id: UUID,
         user_id: UUID,
-        project_id: UUID,
         session_id: UUID,
         content: str,
         role: str,
@@ -225,7 +222,6 @@ class RAGService:
         Args:
             message_id: ID of the message
             user_id: ID of the user
-            project_id: ID of the project
             session_id: ID of the session
             content: Message content
             role: Message role
@@ -238,11 +234,11 @@ class RAGService:
             # Generate embedding
             embedding = await self._get_embedding_service().generate_embedding(content)
             
-            # Store embedding
+            # Store embedding (project_id removed - projects no longer supported)
             embedding_id = await self.vector_storage.store_message_embedding(
                 message_id=message_id,
                 user_id=user_id,
-                project_id=project_id,
+                project_id=None,  # Projects no longer supported
                 session_id=session_id,
                 embedding=embedding,
                 content=content,

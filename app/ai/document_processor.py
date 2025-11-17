@@ -38,10 +38,10 @@ class DocumentProcessor:
         self,
         asset_id: UUID,
         user_id: UUID,
-        project_id: UUID,
-        file_content: bytes,
-        filename: str,
-        content_type: str
+        project_id: Optional[UUID] = None,  # Kept for backward compatibility but ignored
+        file_content: bytes = None,
+        filename: str = None,
+        content_type: str = None
     ) -> Dict[str, Any]:
         """
         Process an uploaded document and generate embeddings
@@ -49,7 +49,7 @@ class DocumentProcessor:
         Args:
             asset_id: ID of the asset record
             user_id: ID of the user who uploaded the document
-            project_id: ID of the project
+            project_id: Ignored - projects no longer supported
             file_content: Raw file content
             filename: Original filename
             content_type: MIME type of the file
@@ -97,7 +97,7 @@ class DocumentProcessor:
                     embedding_id = await vector_storage.store_document_embedding(
                         asset_id=asset_id,
                         user_id=user_id,
-                        project_id=project_id,
+                        project_id=None,  # Projects no longer supported
                         document_type=self._get_document_type(filename),
                         chunk_index=i,
                         chunk_text=chunk,
@@ -308,7 +308,6 @@ class DocumentProcessor:
         self,
         query_embedding: List[float],
         user_id: UUID,
-        project_id: Optional[UUID] = None,
         match_count: int = 5,
         similarity_threshold: float = 0.7
     ) -> List[Dict[str, Any]]:
@@ -318,7 +317,6 @@ class DocumentProcessor:
         Args:
             query_embedding: Query embedding vector
             user_id: ID of the user
-            project_id: Optional project ID to filter by
             match_count: Maximum number of chunks to retrieve
             similarity_threshold: Minimum similarity score
             
@@ -327,7 +325,7 @@ class DocumentProcessor:
         """
         try:
             print(f"🔍 DocumentProcessor: Searching for document chunks")
-            print(f"🔍 DocumentProcessor: user_id={user_id}, project_id={project_id}")
+            print(f"🔍 DocumentProcessor: user_id={user_id}")
             print(f"🔍 DocumentProcessor: match_count={match_count}, similarity_threshold={similarity_threshold}")
             
             # Debug: Check embedding format
@@ -335,50 +333,58 @@ class DocumentProcessor:
             if query_embedding:
                 print(f"🔍 DocumentProcessor: First few values: {query_embedding[:5]}")
             
-            # Debug: Try a very simple query first to see if the function works at all
-            print(f"🔍 DocumentProcessor: Testing RPC function with minimal parameters...")
+            # Try to call the RPC function without project_id parameter
+            # If the database function still expects it, we'll need to update the function
             try:
-                # Test with a very low threshold and high match count
-                test_result = self.supabase.rpc(
+                result = self.supabase.rpc(
                     'get_similar_document_chunks',
                     {
                         'query_embedding': query_embedding,
                         'query_user_id': str(user_id),
-                        'query_project_id': str(project_id) if project_id else None,  # Only user's projects
-                        'match_count': 10,  # Higher match count
-                        'similarity_threshold': 0.01  # Very low threshold
+                        # Note: query_project_id removed - projects no longer supported
+                        'match_count': match_count,
+                        'similarity_threshold': similarity_threshold
                     }
                 ).execute()
-                print(f"🔍 DocumentProcessor: Test RPC result: {test_result}")
-                print(f"🔍 DocumentProcessor: Test result data: {test_result.data}")
-            except Exception as e:
-                print(f"🔍 DocumentProcessor: Test RPC error: {e}")
-            
-            result = self.supabase.rpc(
-                'get_similar_document_chunks',
-                {
-                    'query_embedding': query_embedding,
-                    'query_user_id': str(user_id),
-                    'query_project_id': str(project_id) if project_id else None,
-                    'match_count': match_count,
-                    'similarity_threshold': similarity_threshold
-                }
-            ).execute()
-            
-            print(f"🔍 DocumentProcessor: RPC result: {result}")
-            print(f"🔍 DocumentProcessor: Result data: {result.data}")
-            
-            if result.data:
-                print(f"📚 Found {len(result.data)} relevant document chunks")
-                # Debug: Check user isolation
-                for chunk in result.data:
-                    chunk_user_id = chunk.get('user_id')
-                    if chunk_user_id != str(user_id):
-                        print(f"🚨 SECURITY WARNING: Found document chunk from different user! Expected: {user_id}, Found: {chunk_user_id}")
-                return result.data
-            else:
-                print("📚 No relevant document chunks found")
-                return []
+                
+                print(f"🔍 DocumentProcessor: RPC result: {result}")
+                print(f"🔍 DocumentProcessor: Result data: {result.data}")
+                
+                if result.data:
+                    print(f"📚 Found {len(result.data)} relevant document chunks")
+                    # Debug: Check user isolation
+                    for chunk in result.data:
+                        chunk_user_id = chunk.get('user_id')
+                        if chunk_user_id != str(user_id):
+                            print(f"🚨 SECURITY WARNING: Found document chunk from different user! Expected: {user_id}, Found: {chunk_user_id}")
+                    return result.data
+                else:
+                    print("📚 No relevant document chunks found")
+                    return []
+            except Exception as rpc_error:
+                # If RPC function fails (likely because it still references project_id), 
+                # fall back to direct query
+                print(f"⚠️ RPC function failed (may need database update): {rpc_error}")
+                print(f"🔍 DocumentProcessor: Falling back to direct query...")
+                
+                # Direct query fallback - query document_embeddings directly
+                try:
+                    # Get all document embeddings for this user
+                    embeddings_result = self.supabase.table('document_embeddings').select(
+                        'embedding_id, asset_id, user_id, document_type, chunk_index, chunk_text, metadata'
+                    ).eq('user_id', str(user_id)).limit(match_count * 2).execute()
+                    
+                    if not embeddings_result.data:
+                        print("📚 No document embeddings found for user")
+                        return []
+                    
+                    # For now, return the first N chunks (without similarity search)
+                    # TODO: Implement client-side similarity search or update database function
+                    print(f"📚 Found {len(embeddings_result.data)} document chunks (using direct query fallback)")
+                    return embeddings_result.data[:match_count]
+                except Exception as fallback_error:
+                    print(f"❌ Fallback query also failed: {fallback_error}")
+                    return []
                 
         except Exception as e:
             print(f"❌ Error retrieving document context: {e}")

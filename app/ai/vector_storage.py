@@ -19,7 +19,7 @@ class VectorStorageService:
         self,
         message_id: UUID,
         user_id: UUID,
-        project_id: UUID,
+        project_id: Optional[UUID],  # Kept for backward compatibility but ignored
         session_id: UUID,
         embedding: List[float],
         content: str,
@@ -32,7 +32,7 @@ class VectorStorageService:
         Args:
             message_id: ID of the message
             user_id: ID of the user
-            project_id: ID of the project
+            project_id: Ignored - projects no longer supported
             session_id: ID of the session
             embedding: Embedding vector
             content: Message content (truncated to 500 chars for snippet)
@@ -50,7 +50,7 @@ class VectorStorageService:
                 "embedding_id": str(uuid4()),
                 "message_id": str(message_id),
                 "user_id": str(user_id),
-                "project_id": str(project_id),
+                # Note: project_id removed - projects no longer supported
                 "session_id": str(session_id),
                 "embedding": embedding,
                 "content_snippet": content_snippet,
@@ -76,7 +76,7 @@ class VectorStorageService:
         self,
         query_embedding: List[float],
         user_id: UUID,
-        project_id: Optional[UUID] = None,
+        session_id: Optional[UUID] = None,  # Optional: filter by session
         match_count: int = 10,
         similarity_threshold: float = 0.7
     ) -> List[Dict[str, Any]]:
@@ -86,7 +86,7 @@ class VectorStorageService:
         Args:
             query_embedding: Query embedding vector
             user_id: ID of the user
-            project_id: Optional project ID to filter by
+            session_id: Optional session ID to filter by (None = search all sessions)
             match_count: Maximum number of results
             similarity_threshold: Minimum similarity score (0-1)
             
@@ -94,13 +94,13 @@ class VectorStorageService:
             List of similar messages with similarity scores
         """
         try:
-            # Call the Supabase function
+            # Call the Supabase function with updated signature (no project_id, optional session_id)
             result = self.supabase.rpc(
                 'get_similar_user_messages',
                 {
                     'query_embedding': query_embedding,
                     'query_user_id': str(user_id),
-                    'query_project_id': str(project_id) if project_id else None,
+                    'query_session_id': str(session_id) if session_id else None,
                     'match_count': match_count,
                     'similarity_threshold': similarity_threshold
                 }
@@ -266,7 +266,7 @@ class VectorStorageService:
         self,
         asset_id: UUID,
         user_id: UUID,
-        project_id: UUID,
+        project_id: Optional[UUID],  # Kept for backward compatibility but ignored
         document_type: str,
         chunk_index: int,
         chunk_text: str,
@@ -279,7 +279,7 @@ class VectorStorageService:
         Args:
             asset_id: ID of the asset
             user_id: ID of the user
-            project_id: ID of the project
+            project_id: Ignored - projects no longer supported
             document_type: Type of document ('pdf', 'docx', 'txt', etc.)
             chunk_index: Index of the chunk within the document
             chunk_text: Text content of the chunk
@@ -294,7 +294,7 @@ class VectorStorageService:
                 "embedding_id": str(uuid4()),
                 "asset_id": str(asset_id),
                 "user_id": str(user_id),
-                "project_id": str(project_id),
+                # Note: project_id removed - projects no longer supported
                 "document_type": document_type,
                 "chunk_index": chunk_index,
                 "chunk_text": chunk_text,
