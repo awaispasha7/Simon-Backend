@@ -79,9 +79,17 @@ except Exception as e:
 app = FastAPI()
 
 # Add CORS middleware with comprehensive configuration
+# Note: When allow_credentials=True, we cannot use allow_origins=["*"]
+# We must explicitly list allowed origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for now - can be restricted later
+    allow_origins=[
+        "https://chatbot-simon.vercel.app",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
     allow_headers=["*"],  # Allow all headers
