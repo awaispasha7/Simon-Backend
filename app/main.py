@@ -106,19 +106,20 @@ if transcribe:
     except Exception as e:
         print(f"ERROR: Error including transcribe router: {e}")
 
-if dossier:
-    try:
-        app.include_router(dossier.router, prefix="/api/v1", tags=["dossier"])
-        print("SUCCESS: Dossier router included")
-    except Exception as e:
-        print(f"ERROR: Error including dossier router: {e}")
+# Dossier and Projects routers removed - features no longer supported
+# if dossier:
+#     try:
+#         app.include_router(dossier.router, prefix="/api/v1", tags=["dossier"])
+#         print("SUCCESS: Dossier router included")
+#     except Exception as e:
+#         print(f"ERROR: Error including dossier router: {e}")
 
-if projects:
-    try:
-        app.include_router(projects.router, prefix="/api/v1", tags=["projects"])
-        print("SUCCESS: Projects router included")
-    except Exception as e:
-        print(f"ERROR: Error including projects router: {e}")
+# if projects:
+#     try:
+#         app.include_router(projects.router, prefix="/api/v1", tags=["projects"])
+#         print("SUCCESS: Projects router included")
+#     except Exception as e:
+#         print(f"ERROR: Error including projects router: {e}")
 
 if upload:
     try:
@@ -157,10 +158,27 @@ if simple_users:
         print(f"ERROR: Error including simple users router: {e}")
 
 
-# Add root route to handle 404 errors
+# Add root route
 @app.get("/")
 async def root():
-    return {"message": "Stories We Tell Backend API", "status": "running"}
+    return {
+        "message": "Simon's Chatbot Backend API",
+        "status": "running",
+        "version": "2.0",
+        "description": "Fitness coaching chatbot API with session-based chat system",
+        "endpoints": {
+            "root": "/",
+            "health": "/health",
+            "api_docs": "/docs",
+            "chat": "/api/v1/chat",
+            "sessions": "/api/v1/sessions",
+            "session": "/api/v1/session",
+            "users": "/api/v1/users",
+            "auth": "/api/v1/auth",
+            "upload": "/api/v1/upload",
+            "transcribe": "/transcribe"
+        }
+    }
 
 # Add health check endpoint
 @app.get("/health")
@@ -168,19 +186,89 @@ async def health_check():
     return {
         "status": "healthy",
         "message": "Backend is running",
+        "timestamp": datetime.now().isoformat(),
         "cors_enabled": True,
-        "allowed_origins": ["*"],  # All origins allowed
-        "endpoints": ["/dossier", "/transcribe", "/upload", "/api/v1/chat", "/api/v1/sessions", "/api/v1/auth/login", "/api/v1/auth/signup", "/api/v1/dossiers"],
+        "allowed_origins": ["*"],
         "routes_available": {
-            "chat_sessions": False,  # Using simplified system
+            "session_management": simple_session_manager is not None,
+            "chat": simple_chat is not None,
+            "users": simple_users is not None,
             "auth": auth is not None,
             "transcribe": transcribe is not None,
-            "dossier": dossier is not None,
             "upload": upload is not None,
         },
+        "api_endpoints": {
+            "session": [
+                "POST /api/v1/session - Create or get session",
+                "GET /api/v1/sessions - Get user sessions",
+                "GET /api/v1/sessions/{session_id}/messages - Get session messages",
+                "PUT /api/v1/sessions/{session_id}/title - Update session title",
+                "DELETE /api/v1/sessions/{session_id} - Delete session",
+                "DELETE /api/v1/sessions - Delete all sessions"
+            ],
+            "chat": [
+                "POST /api/v1/chat - Send chat message (streaming)"
+            ],
+            "users": [
+                "POST /api/v1/users - Create or update user",
+                "GET /api/v1/users/me - Get current user"
+            ],
+            "auth": [
+                "POST /api/v1/auth/login - User login",
+                "POST /api/v1/auth/signup - User signup"
+            ]
+        },
         "background_workers": {
-            "periodic_cleanup": True,
             "knowledge_extraction": True
+        },
+        "features": {
+            "authentication_required": True,
+            "anonymous_sessions": False,
+            "projects": False,
+            "dossier": False
+        }
+    }
+
+# Add API info endpoint
+@app.get("/api")
+async def api_info():
+    """Get API information and available endpoints"""
+    return {
+        "name": "Simon's Chatbot API",
+        "version": "2.0",
+        "description": "Fitness coaching chatbot API",
+        "base_url": "/api/v1",
+        "authentication": "Required for all endpoints (except /health, /, /api)",
+        "endpoints": {
+            "session": {
+                "create_or_get": "POST /api/v1/session",
+                "list": "GET /api/v1/sessions",
+                "get_messages": "GET /api/v1/sessions/{session_id}/messages",
+                "update_title": "PUT /api/v1/sessions/{session_id}/title",
+                "delete": "DELETE /api/v1/sessions/{session_id}",
+                "delete_all": "DELETE /api/v1/sessions"
+            },
+            "chat": {
+                "send_message": "POST /api/v1/chat (streaming response)"
+            },
+            "users": {
+                "create_or_update": "POST /api/v1/users",
+                "get_current": "GET /api/v1/users/me"
+            },
+            "auth": {
+                "login": "POST /api/v1/auth/login",
+                "signup": "POST /api/v1/auth/signup"
+            },
+            "upload": {
+                "upload_file": "POST /api/v1/upload"
+            },
+            "transcribe": {
+                "transcribe_audio": "POST /transcribe"
+            }
+        },
+        "headers": {
+            "required": ["X-User-ID"],
+            "optional": ["X-Session-ID", "Authorization"]
         }
     }
 
