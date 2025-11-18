@@ -35,33 +35,6 @@ router = APIRouter()
 async def send_event(_event: dict) -> None:
     return
 
-def _is_story_completion_text(text: str) -> bool:
-    """Heuristic to detect completion based on assistant text."""
-    if not text:
-        return False
-    normalized = text.lower()
-    completion_markers = [
-        "the story is complete",
-        "your story is complete",
-        "story is complete",
-        "story complete",
-        "we've reached the end",
-        "the end of the story",
-        "conclusion of the story",
-        "would you like to create another story",  # Matches: "Would you like to create another story?"
-        "would you like to start another story",
-        "would you like to begin another story",
-        "new story",
-        "start a new story",
-        "create another story",
-        "sign up to create unlimited",  # Matches: "Sign up to create unlimited stories..."
-        "create unlimited stories",  # Additional variant
-    ]
-    result = any(marker in normalized for marker in completion_markers)
-    if result:
-        print(f"🎯 [COMPLETION] Detected completion marker in: {text[:200]}...")
-    return result
-
 async def _generate_conversation_transcript(conversation_history: List[Dict]) -> str:
     """Generate a formatted conversation transcript from chat history."""
     try:
@@ -433,42 +406,6 @@ async def chat(
                             print(f"📚 Stored assistant message embedding: {assistant_message_id}")
                         except Exception as e:
                             print(f"⚠️ Failed to store assistant message embedding: {e}")
-
-                    # Detect completion and handle wrap-up actions
-                    try:
-                        # Fetch all messages to accurately detect story completion
-                        updated_history_for_completion = await _get_conversation_history(str(session_id), str(user_id), limit=None)
-                        message_count = len(updated_history_for_completion) if updated_history_for_completion else 0
-                        
-                        # Only check for completion if we have enough conversation history
-                        # This prevents false positives from first messages that might contain phrases like "new story"
-                        MIN_MESSAGES_FOR_COMPLETION = 6  # At least 3 user + 3 assistant messages
-                        
-                        print(f"🔍 [COMPLETION CHECK] Checking story completion...")
-                        print(f"🔍 [COMPLETION CHECK] Total messages in conversation: {message_count}")
-                        print(f"🔍 [COMPLETION CHECK] Response length: {len(full_response)} chars")
-                        print(f"🔍 [COMPLETION CHECK] Response preview: {full_response[:300]}...")
-                        
-                        is_complete = False
-                        if message_count < MIN_MESSAGES_FOR_COMPLETION:
-                            print(f"⏭️ [COMPLETION CHECK] Skipping completion check - only {message_count} messages (minimum {MIN_MESSAGES_FOR_COMPLETION} required)")
-                        else:
-                            is_complete = _is_story_completion_text(full_response)
-                            print(f"🔍 [COMPLETION CHECK] Is complete: {is_complete}")
-                        
-                        if is_complete:
-                            print("✅ Story completion detected - marking session inactive")
-                            # mark session inactive
-                            try:
-                                supabase = get_supabase_client()
-                                supabase.table("sessions").update({
-                                    "is_active": False,
-                                    "updated_at": datetime.now(timezone.utc).isoformat()
-                                }).eq("session_id", str(session_id)).execute()
-                            except Exception as _e:
-                                print(f"⚠️ Failed to close session: {_e}")
-                    except Exception as _e:
-                        print(f"⚠️ Completion handling error: {_e}")
                     
                 else:
                     # Fallback response if AI is not available

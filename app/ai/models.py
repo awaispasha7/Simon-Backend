@@ -159,36 +159,6 @@ class AIModelManager:
         
         return " | ".join(context_parts) if context_parts else "Conversation in progress"
 
-    def is_story_complete(self, dossier_context: dict) -> bool:
-        """Check if story is complete based on filled slots"""
-        if not dossier_context:
-            return False
-        
-        # Required slots for story completion
-        required_slots = [
-            'story_timeframe',
-            'story_location', 
-            'story_world_type',
-            'subject_full_name',
-            'problem_statement',
-            'actions_taken',
-            'outcome'
-        ]
-        
-        # Check if all required slots are filled (not "Unknown")
-        filled_slots = 0
-        for slot in required_slots:
-            value = dossier_context.get(slot, 'Unknown')
-            if value and value != 'Unknown' and value.strip():
-                filled_slots += 1
-        
-        # Story is complete if 80% of required slots are filled
-        completion_rate = filled_slots / len(required_slots)
-        is_complete = completion_rate >= 0.8
-        
-        print(f"📊 Story completion check: {filled_slots}/{len(required_slots)} slots filled ({completion_rate:.1%}) - {'COMPLETE' if is_complete else 'INCOMPLETE'}")
-        return is_complete
-
     async def generate_response(self, task_type: TaskType, prompt: str, **kwargs) -> Dict[str, Any]:
         """
         Generate response using the appropriate AI model for the task type
@@ -232,11 +202,17 @@ class AIModelManager:
             
             if rag_context:
                 # Include combined RAG context (user messages + documents + global knowledge)
-                if rag_context.get("combined_context_text"):
-                    rag_context_text = f"\n\n## RELEVANT CONTEXT FROM YOUR PREVIOUS CONVERSATIONS:\n{rag_context.get('combined_context_text')}\n"
-                    print(f"📚 Including RAG context: {rag_context.get('user_context_count', 0)} user messages, {rag_context.get('document_context_count', 0)} document chunks, {rag_context.get('global_context_count', 0)} global patterns")
+                combined_text = rag_context.get("combined_context_text", "").strip()
+                if combined_text:
+                    rag_context_text = f"\n\n## RELEVANT CONTEXT FROM YOUR PREVIOUS CONVERSATIONS:\n{combined_text}\n"
+                    user_count = rag_context.get('user_context_count', 0)
+                    doc_count = rag_context.get('document_context_count', 0)
+                    global_count = rag_context.get('global_context_count', 0)
+                    print(f"📚 Including RAG context: {user_count} user messages, {doc_count} document chunks, {global_count} global patterns")
+                    print(f"📚 RAG context text length: {len(combined_text)} chars")
                 else:
                     # Fallback: build lightweight context if items exist but combined text wasn't provided
+                    print(f"⚠️ RAG context exists but combined_context_text is empty or missing")
                     uc = rag_context.get("user_context") or []
                     dc = rag_context.get("document_context") or []
                     gc = rag_context.get("global_context") or []
