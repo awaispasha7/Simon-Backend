@@ -116,8 +116,19 @@ class RAGService:
                 similarity_threshold=self.similarity_threshold
             )
             
+            # Step 5: Debug - Log what we actually retrieved
+            if global_context:
+                print(f"🔍 [RAG DEBUG] Sample global_context item keys: {list(global_context[0].keys()) if global_context else 'N/A'}")
+                print(f"🔍 [RAG DEBUG] Sample global_context item: {global_context[0] if global_context else 'N/A'}")
+            if user_context:
+                print(f"🔍 [RAG DEBUG] Sample user_context item keys: {list(user_context[0].keys()) if user_context else 'N/A'}")
+            
             # Step 5: Build combined context text for LLM prompt
             combined_context_text = self._format_rag_context(user_context, global_context, document_context)
+            
+            print(f"🔍 [RAG DEBUG] Formatted context text length: {len(combined_context_text)} chars")
+            if combined_context_text:
+                print(f"🔍 [RAG DEBUG] Formatted context preview: {combined_context_text[:200]}...")
             
             # Step 6: Build metadata
             metadata = {
@@ -172,9 +183,11 @@ class RAGService:
             context_parts.append("## Relevant Context from Your Previous Conversations:")
             for i, item in enumerate(user_context[:5], 1):  # Limit to top 5
                 role = item.get('role', 'unknown')
-                content = item.get('content', '')
+                # Try both 'content' and 'content_snippet' fields
+                content = item.get('content', '') or item.get('content_snippet', '')
                 similarity = item.get('similarity', 0)
-                context_parts.append(f"{i}. [{role.upper()}] (relevance: {similarity:.2f}) {content[:200]}...")
+                if content.strip():
+                    context_parts.append(f"{i}. [{role.upper()}] (relevance: {similarity:.2f}) {content[:200]}...")
             context_parts.append("")
         
         # Add document context
@@ -195,11 +208,25 @@ class RAGService:
             for i, item in enumerate(global_context, 1):
                 category = item.get('category', 'general')
                 pattern = item.get('pattern_type', 'unknown')
-                example = item.get('example_text', '')
+                example = item.get('example_text', '') or item.get('description', '') or ''
                 similarity = item.get('similarity', 0)
-                context_parts.append(
-                    f"{i}. [{category}/{pattern}] (relevance: {similarity:.2f}) {example[:150]}..."
-                )
+                
+                # Only add if we have actual content
+                if example.strip():
+                    context_parts.append(
+                        f"{i}. [{category}/{pattern}] (relevance: {similarity:.2f}) {example[:150]}..."
+                    )
+                else:
+                    # Fallback: use description or category/pattern info
+                    desc = item.get('description', '')
+                    if desc:
+                        context_parts.append(
+                            f"{i}. [{category}/{pattern}] (relevance: {similarity:.2f}) {desc[:150]}..."
+                        )
+                    else:
+                        context_parts.append(
+                            f"{i}. [{category}/{pattern}] (relevance: {similarity:.2f})"
+                        )
             context_parts.append("")
         
         if not context_parts:
