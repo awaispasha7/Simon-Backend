@@ -204,7 +204,7 @@ class AIModelManager:
                 # Include combined RAG context (user messages + documents + global knowledge)
                 combined_text = rag_context.get("combined_context_text", "").strip()
                 if combined_text:
-                    rag_context_text = f"\n\n## RELEVANT CONTEXT FROM YOUR PREVIOUS CONVERSATIONS:\n{combined_text}\n"
+                    rag_context_text = f"\n\n## RELEVANT CONTEXT:\n{combined_text}\n"
                     # Get counts from actual lists (more reliable than metadata)
                     user_count = len(rag_context.get('user_context', []))
                     doc_count = len(rag_context.get('document_context', []))

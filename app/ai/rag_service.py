@@ -18,13 +18,16 @@ class RAGService:
         self.vector_storage = vector_storage
         
         # Configuration for retrieval
-        self.user_context_weight = 0.3  # 30% weight on user-specific context
-        self.global_context_weight = 0.4  # 40% weight on global patterns (includes image analysis)
-        self.document_context_weight = 0.3  # 30% weight on document context
-        self.user_match_count = 15  # Retrieve more user messages for stronger continuity
-        self.global_match_count = 5  # A few more global patterns
-        self.document_match_count = 6  # Broaden document context (images/docs)
+        # Always query from ALL sources - let similarity search determine relevance
+        # Higher match counts ensure we don't miss relevant information
+        self.user_match_count = 20  # Retrieve from user messages
+        self.global_match_count = 20  # Retrieve from global knowledge (training data, "About Me", etc.)
+        self.document_match_count = 15  # Retrieve from user-uploaded documents
         self.similarity_threshold = 0.05  # Broader net to avoid misses
+        
+        # Display limits (to avoid token bloat, but we retrieve more to have options)
+        # The most relevant items (by similarity) will naturally float to the top
+        self.max_display_items = 30  # Total items to show in prompt (most relevant from all sources)
     
     def _get_embedding_service(self):
         """Lazy initialization of embedding service"""
@@ -167,6 +170,7 @@ class RAGService:
     ) -> str:
         """
         Format retrieved context into a prompt-friendly string
+        Combines ALL sources and sorts by similarity (most relevant first)
         
         Args:
             user_context: User-specific messages
@@ -178,59 +182,114 @@ class RAGService:
         """
         context_parts = []
         
-        # Add user-specific context
-        if user_context:
-            context_parts.append("## Relevant Context from Your Previous Conversations:")
-            for i, item in enumerate(user_context[:5], 1):  # Limit to top 5
-                role = item.get('role', 'unknown')
-                # Try both 'content' and 'content_snippet' fields
-                content = item.get('content', '') or item.get('content_snippet', '')
-                similarity = item.get('similarity', 0)
-                if content.strip():
-                    context_parts.append(f"{i}. [{role.upper()}] (relevance: {similarity:.2f}) {content[:200]}...")
-            context_parts.append("")
+        # Combine all sources into a unified list with source type
+        all_items = []
         
-        # Add document context
-        if document_context:
-            context_parts.append("## Relevant Information from Your Uploaded Documents:")
-            for i, item in enumerate(document_context, 1):
-                doc_type = item.get('document_type', 'unknown')
-                chunk_text = item.get('chunk_text', '')
-                similarity = item.get('similarity', 0)
-                context_parts.append(
-                    f"{i}. [{doc_type.upper()}] (relevance: {similarity:.2f}) {chunk_text[:200]}..."
-                )
-            context_parts.append("")
+        # Add user context items
+        for item in user_context:
+            content = item.get('content', '') or item.get('content_snippet', '')
+            if content.strip():
+                all_items.append({
+                    'source': 'user',
+                    'similarity': item.get('similarity', 0),
+                    'content': content,
+                    'role': item.get('role', 'unknown'),
+                    'metadata': item
+                })
         
-        # Add global knowledge context
-        if global_context:
-            context_parts.append("## Relevant Storytelling Patterns and Knowledge:")
-            for i, item in enumerate(global_context, 1):
-                category = item.get('category', 'general')
-                pattern = item.get('pattern_type', 'unknown')
-                example = item.get('example_text', '') or item.get('description', '') or ''
-                similarity = item.get('similarity', 0)
-                
-                # Only add if we have actual content
-                if example.strip():
-                    context_parts.append(
-                        f"{i}. [{category}/{pattern}] (relevance: {similarity:.2f}) {example[:150]}..."
-                    )
-                else:
-                    # Fallback: use description or category/pattern info
-                    desc = item.get('description', '')
-                    if desc:
-                        context_parts.append(
-                            f"{i}. [{category}/{pattern}] (relevance: {similarity:.2f}) {desc[:150]}..."
-                        )
-                    else:
-                        context_parts.append(
-                            f"{i}. [{category}/{pattern}] (relevance: {similarity:.2f})"
-                        )
-            context_parts.append("")
+        # Add document context items
+        for item in document_context:
+            chunk_text = item.get('chunk_text', '')
+            if chunk_text.strip():
+                all_items.append({
+                    'source': 'document',
+                    'similarity': item.get('similarity', 0),
+                    'content': chunk_text,
+                    'doc_type': item.get('document_type', 'unknown'),
+                    'metadata': item
+                })
         
-        if not context_parts:
+        # Add global knowledge items
+        for item in global_context:
+            example = item.get('example_text', '') or item.get('description', '') or ''
+            if example.strip():
+                all_items.append({
+                    'source': 'global',
+                    'similarity': item.get('similarity', 0),
+                    'content': example,
+                    'category': item.get('category', 'general'),
+                    'pattern_type': item.get('pattern_type', 'unknown'),
+                    'tags': item.get('tags', []),
+                    'metadata': item
+                })
+        
+        # Sort ALL items by similarity (highest first) - most relevant items naturally float to top
+        all_items.sort(key=lambda x: x.get('similarity', 0), reverse=True)
+        
+        # Take top N most relevant items regardless of source
+        top_items = all_items[:self.max_display_items]
+        
+        if not top_items:
             return ""
+        
+        # Group by source for display organization, but items are already sorted by similarity
+        user_items = [item for item in top_items if item['source'] == 'user']
+        doc_items = [item for item in top_items if item['source'] == 'document']
+        global_items = [item for item in top_items if item['source'] == 'global']
+        
+        # Display sources in order of their highest similarity item (most relevant source first)
+        source_groups = []
+        if global_items:
+            max_global_sim = max([item['similarity'] for item in global_items])
+            source_groups.append(('global', global_items, max_global_sim))
+        if doc_items:
+            max_doc_sim = max([item['similarity'] for item in doc_items])
+            source_groups.append(('document', doc_items, max_doc_sim))
+        if user_items:
+            max_user_sim = max([item['similarity'] for item in user_items])
+            source_groups.append(('user', user_items, max_user_sim))
+        
+        # Sort sources by their highest similarity item
+        source_groups.sort(key=lambda x: x[2], reverse=True)
+        
+        # Format each source group
+        for source_type, items, _max_sim in source_groups:
+            if not items:
+                continue
+            
+            if source_type == 'global':
+                context_parts.append("## Relevant Knowledge:")
+                for i, item in enumerate(items, 1):
+                    category = item.get('category', 'general')
+                    pattern = item.get('pattern_type', 'unknown')
+                    content = item['content']
+                    similarity = item['similarity']
+                    context_parts.append(
+                        f"{i}. [{category}/{pattern}] (relevance: {similarity:.2f}) {content[:250]}..."
+                    )
+                context_parts.append("")
+            
+            elif source_type == 'document':
+                context_parts.append("## Relevant Documents:")
+                for i, item in enumerate(items, 1):
+                    doc_type = item.get('doc_type', 'unknown')
+                    content = item['content']
+                    similarity = item['similarity']
+                    context_parts.append(
+                        f"{i}. [{doc_type.upper()}] (relevance: {similarity:.2f}) {content[:250]}..."
+                    )
+                context_parts.append("")
+            
+            elif source_type == 'user':
+                context_parts.append("## Relevant Conversations:")
+                for i, item in enumerate(items, 1):
+                    role = item.get('role', 'unknown')
+                    content = item['content']
+                    similarity = item['similarity']
+                    context_parts.append(
+                        f"{i}. [{role.upper()}] (relevance: {similarity:.2f}) {content[:200]}..."
+                    )
+                context_parts.append("")
         
         return "\n".join(context_parts)
     
