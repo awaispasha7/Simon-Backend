@@ -118,6 +118,87 @@ class AIModelManager:
         ]
         return any(keyword in prompt_lower for keyword in search_keywords)
     
+    def _load_owner_info(self) -> str:
+        """Load owner's personal information from Personal_info.txt"""
+        try:
+            from pathlib import Path
+            
+            # Try to find the Personal_info.txt file
+            # Look in rag-training-data folder relative to the backend root
+            backend_root = Path(__file__).parent.parent.parent
+            personal_info_path = backend_root / "rag-training-data" / "Personal_info.txt"
+            
+            if not personal_info_path.exists():
+                # Try alternative path
+                personal_info_path = Path(__file__).parent.parent / "rag-training-data" / "Personal_info.txt"
+            
+            if personal_info_path.exists():
+                with open(personal_info_path, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                
+                # Extract the English version (more comprehensive)
+                lines = content.split('\n')
+                english_start = None
+                for i, line in enumerate(lines):
+                    if 'english version' in line.lower():
+                        english_start = i
+                        break
+                
+                if english_start:
+                    # Get English section
+                    english_content = '\n'.join(lines[english_start:]).strip()
+                    # Remove the "English Version:" header
+                    if english_content.lower().startswith('english'):
+                        parts = english_content.split('\n', 1)
+                        if len(parts) > 1:
+                            english_content = parts[1].strip()
+                else:
+                    # Use full content if no English section found
+                    english_content = content
+                
+                # Format for system prompt
+                return f"""OWNER INFORMATION (ALWAYS AVAILABLE - Use this when users ask about you, the owner, or Simon):
+
+## ABOUT THE CHATBOT OWNER - SIMON BOBERG:
+
+{english_content}
+
+IMPORTANT: 
+- You are representing Simon Boberg, the owner of this chatbot
+- When users ask "do you know who is Simon?", "tell me about yourself", "who are you", or similar questions, use this information
+- Simon is a fitness and health coach specializing in sustainable weight management, coaching after liposuction, and helping people develop healthy habits
+- Always refer to this information when answering questions about the owner or yourself
+
+"""
+            
+            # Fallback if file not found
+            return """OWNER INFORMATION (ALWAYS AVAILABLE - Use this when users ask about you, the owner, or Simon):
+
+## ABOUT THE CHATBOT OWNER - SIMON BOBERG:
+
+You are representing Simon Boberg, a fitness and health coach. Simon specializes in sustainable weight management, coaching after liposuction, and helping people develop healthy habits through a combination of mindset, nutrition, and movement.
+
+Simon is a Psychological Coach trained by Tony Robbins & Cloe Madanes, and a Nutrition Coach with Precision Nutrition (Level 1). He has personal experience with weight loss challenges, including two liposuctions, and helps clients achieve lasting results through evidence-based, practical coaching.
+
+Contact: simon@simonbobergcoaching.com | WhatsApp: +34 649 411 007
+
+IMPORTANT: When users ask about you, the owner, or Simon, refer to this information.
+
+"""
+            
+        except Exception as e:
+            print(f"⚠️ Error loading owner info: {e}")
+            # Return minimal fallback
+            return """OWNER INFORMATION (ALWAYS AVAILABLE - Use this when users ask about you, the owner, or Simon):
+
+## ABOUT THE CHATBOT OWNER - SIMON BOBERG:
+
+You are representing Simon Boberg, a fitness and health coach specializing in sustainable weight management and helping people develop healthy habits.
+
+IMPORTANT: When users ask about you, the owner, or Simon, refer to this information.
+
+"""
+    
     def _build_conversation_context(self, conversation_history: list, image_context: str = "") -> str:
         """Build conversation context for the system prompt"""
         if not conversation_history:
@@ -242,42 +323,13 @@ class AIModelManager:
                     else:
                         print(f"⚠️ RAG context present but empty items")
             
-            # Check for dossier context (existing story data) - Updated for client requirements
-            dossier_context = kwargs.get("dossier_context")
-            dossier_info = ""
-            if dossier_context:
-                dossier_info = "\n\nEXISTING STORY DATA (Slot-based):\n"
-                
-                # Story Frame
-                if dossier_context.get('story_timeframe') and dossier_context.get('story_timeframe') != 'Unknown':
-                    dossier_info += f"Time: {dossier_context['story_timeframe']}\n"
-                if dossier_context.get('story_location') and dossier_context.get('story_location') != 'Unknown':
-                    dossier_info += f"Location: {dossier_context['story_location']}\n"
-                if dossier_context.get('story_world_type') and dossier_context.get('story_world_type') != 'Unknown':
-                    dossier_info += f"World Type: {dossier_context['story_world_type']}\n"
-                
-                # Character (Subject)
-                if dossier_context.get('subject_full_name') and dossier_context.get('subject_full_name') != 'Unknown':
-                    dossier_info += f"Character: {dossier_context['subject_full_name']}\n"
-                if dossier_context.get('subject_relationship_to_writer') and dossier_context.get('subject_relationship_to_writer') != 'Unknown':
-                    dossier_info += f"Relationship: {dossier_context['subject_relationship_to_writer']}\n"
-                
-                # Story Craft
-                if dossier_context.get('problem_statement') and dossier_context.get('problem_statement') != 'Unknown':
-                    dossier_info += f"Problem: {dossier_context['problem_statement']}\n"
-                if dossier_context.get('actions_taken') and dossier_context.get('actions_taken') != 'Unknown':
-                    dossier_info += f"Actions: {dossier_context['actions_taken']}\n"
-                if dossier_context.get('outcome') and dossier_context.get('outcome') != 'Unknown':
-                    dossier_info += f"Outcome: {dossier_context['outcome']}\n"
-                
-                # Technical
-                if dossier_context.get('title') and dossier_context.get('title') != 'Untitled Story':
-                    dossier_info += f"Title: {dossier_context['title']}\n"
-                
-                print(f"📋 Including dossier context: {dossier_context.get('title', 'Untitled')} - {len([k for k, v in dossier_context.items() if v and v != 'Unknown'])} slots filled")
+            # Load owner's personal information
+            owner_info = self._load_owner_info()
             
             # Short-form content creation assistant system prompt
             system_prompt = f"""You are a personal content creation assistant helping creators and influencers create engaging short-form video content for Instagram and TikTok. Your role is to help users develop compelling content ideas, scripts, and strategies for their niche.
+
+        {owner_info}
 
         CORE PRINCIPLES:
         1. CONTENT-FIRST: Focus on creating viral-worthy, engaging short-form content
@@ -411,7 +463,7 @@ class AIModelManager:
         CONVERSATION CONTEXT:
         {self._build_conversation_context(kwargs.get("conversation_history", []), kwargs.get("image_context", ""))}
 
-        Be energetic, creative, and always focused on helping them create viral-worthy short-form content! Adapt to their niche naturally - only mention specific topics (like fitness, beauty, cooking, etc.) if they bring them up first. 🎬{rag_context_text}{dossier_info}"""
+        Be energetic, creative, and always focused on helping them create viral-worthy short-form content! Adapt to their niche naturally - only mention specific topics (like fitness, beauty, cooking, etc.) if they bring them up first. 🎬{rag_context_text}"""
 
             # Build messages with conversation history for context
             messages = [{"role": "system", "content": system_prompt}]

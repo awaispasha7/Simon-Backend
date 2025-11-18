@@ -65,7 +65,8 @@ class RAGService:
             user_message_lower = user_message.lower()
             is_personal_query = any(phrase in user_message_lower for phrase in [
                 "do you know about me", "tell me about myself", "who am i", "about me",
-                "what do you know", "my information", "personal information"
+                "what do you know", "my information", "personal information",
+                "do you know who", "who is", "tell me about", "simon"
             ])
             
             if conversation_history:
@@ -81,7 +82,8 @@ class RAGService:
             # Enhance query for personal information to improve semantic matching
             if is_personal_query:
                 # Add context keywords that would match personal info content
-                query_text = f"{query_text} personal information about the user coaching health fitness weight loss liposuction"
+                query_text = f"{query_text} personal information about the user coaching health fitness weight loss liposuction Simon Boberg"
+                print(f"🔍 [RAG] Personal query detected - enhanced query: {query_text[:200]}...")
             
             query_embedding = await self._get_embedding_service().generate_query_embedding(query_text)
             
@@ -144,7 +146,22 @@ class RAGService:
             
             print(f"🔍 [RAG DEBUG] Formatted context text length: {len(combined_context_text)} chars")
             if combined_context_text:
-                print(f"🔍 [RAG DEBUG] Formatted context preview: {combined_context_text[:200]}...")
+                print(f"🔍 [RAG DEBUG] Formatted context preview: {combined_context_text[:500]}...")
+                # Check if personal info is in the context
+                context_lower = combined_context_text.lower()
+                has_simon = "simon" in context_lower or "boberg" in context_lower
+                has_coaching = "coaching" in context_lower
+                has_personal = "personal" in context_lower or "about me" in context_lower
+                print(f"🔍 [RAG DEBUG] Context check - Simon/Boberg: {has_simon}, Coaching: {has_coaching}, Personal: {has_personal}")
+                
+                # Show top 5 global items to see what's being included
+                if global_context:
+                    print(f"🔍 [RAG DEBUG] Top 5 global knowledge items by similarity:")
+                    for i, item in enumerate(global_context[:5], 1):
+                        tags = item.get('tags', [])
+                        similarity = item.get('similarity', 0)
+                        preview = (item.get('example_text', '') or item.get('description', ''))[:150]
+                        print(f"  {i}. Similarity: {similarity:.3f}, Tags: {tags}, Preview: {preview}...")
             
             # Step 6: Build metadata
             metadata = {
