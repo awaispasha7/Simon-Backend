@@ -18,8 +18,8 @@ class RAGService:
         self.vector_storage = vector_storage
         
         # Configuration for retrieval
-        self.user_context_weight = 0.4  # 40% weight on user-specific context
-        self.global_context_weight = 0.3  # 30% weight on global patterns (includes image analysis)
+        self.user_context_weight = 0.3  # 30% weight on user-specific context
+        self.global_context_weight = 0.4  # 40% weight on global patterns (includes image analysis)
         self.document_context_weight = 0.3  # 30% weight on document context
         self.user_match_count = 15  # Retrieve more user messages for stronger continuity
         self.global_match_count = 5  # A few more global patterns
