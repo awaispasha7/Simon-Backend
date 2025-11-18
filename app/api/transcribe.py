@@ -24,22 +24,54 @@ async def transcribe_audio(audio_file: UploadFile = File(...)):
         print(f"🎤 Content type: {audio_file.content_type}")
         print(f"🎤 File size: {audio_file.size if hasattr(audio_file, 'size') else 'unknown'}")
         
-        # Validate file type
-        if not audio_file.content_type or not audio_file.content_type.startswith('audio/'):
-            raise HTTPException(status_code=400, detail="File must be an audio file")
+        # Validate that we received a file
+        if not audio_file.filename and not audio_file.content_type:
+            print("❌ No file received or invalid file")
+            raise HTTPException(status_code=400, detail="No audio file received")
+        
+        # Validate file type - be more lenient with webm files
+        if audio_file.content_type:
+            if not (audio_file.content_type.startswith('audio/') or 
+                   audio_file.content_type == 'video/webm' or 
+                   audio_file.content_type == 'audio/webm'):
+                print(f"❌ Invalid content type: {audio_file.content_type}")
+                raise HTTPException(status_code=400, detail=f"File must be an audio file. Received: {audio_file.content_type}")
+        else:
+            # If no content type, check filename extension
+            if audio_file.filename:
+                valid_extensions = ['.wav', '.mp3', '.m4a', '.webm', '.ogg', '.flac']
+                if not any(audio_file.filename.lower().endswith(ext) for ext in valid_extensions):
+                    print(f"❌ Invalid file extension: {audio_file.filename}")
+                    raise HTTPException(status_code=400, detail=f"File must be an audio file. Received: {audio_file.filename}")
         
         # Validate file size (max 25MB for Whisper)
         MAX_FILE_SIZE = 25 * 1024 * 1024  # 25MB
         file_content = await audio_file.read()
+        if len(file_content) == 0:
+            raise HTTPException(status_code=400, detail="Audio file is empty")
         if len(file_content) > MAX_FILE_SIZE:
             raise HTTPException(status_code=400, detail="Audio file too large. Max size is 25MB.")
         
         print(f"🎤 File content size: {len(file_content)} bytes")
         
-        # Create temporary file for Whisper API
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+        # Determine file extension from filename or content type
+        file_extension = '.webm'  # Default
+        if audio_file.filename:
+            if audio_file.filename.lower().endswith('.webm'):
+                file_extension = '.webm'
+            elif audio_file.filename.lower().endswith('.mp3'):
+                file_extension = '.mp3'
+            elif audio_file.filename.lower().endswith('.wav'):
+                file_extension = '.wav'
+            elif audio_file.filename.lower().endswith('.m4a'):
+                file_extension = '.m4a'
+        
+        # Create temporary file for Whisper API (preserve original format)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
             temp_file.write(file_content)
             temp_file_path = temp_file.name
+        
+        print(f"🎤 Created temp file: {temp_file_path} with extension {file_extension}")
         
         try:
             # Check if OpenAI API key is available
