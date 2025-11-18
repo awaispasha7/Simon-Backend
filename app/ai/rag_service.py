@@ -18,17 +18,22 @@ class RAGService:
         self.vector_storage = vector_storage
         
         # Configuration for retrieval
-        # Always query from ALL sources - let similarity search determine relevance
-        # Higher match counts ensure we don't miss relevant information
-        # Increased counts to capture personal info even with lower similarity scores
-        self.user_match_count = 30  # Retrieve from user messages
-        self.global_match_count = 50  # Retrieve from global knowledge (training data, "About Me", etc.) - increased to capture personal info
-        self.document_match_count = 20  # Retrieve from user-uploaded documents
-        self.similarity_threshold = 0.05  # Broader net to avoid misses
+        # MAXIMUM RETRIEVAL: Fetch as much as possible to ensure we don't miss any relevant information
+        # The goal is to capture ALL information the user might be looking for
+        # Higher counts = larger window = more comprehensive coverage
+        self.user_match_count = 100  # Retrieve from user messages (increased significantly)
+        self.global_match_count = 200  # Retrieve from global knowledge (training data, etc.) - very large to capture all possibilities
+        self.document_match_count = 100  # Retrieve from user-uploaded documents (increased significantly)
+        self.similarity_threshold = 0.05  # Very low threshold to cast a wide net
         
-        # Display limits (to avoid token bloat, but we retrieve more to have options)
-        # The most relevant items (by similarity) will naturally float to the top
-        self.max_display_items = 40  # Total items to show in prompt (most relevant from all sources) - increased to include more personal info
+        # Display configuration: Show ALL retrieved items above minimum similarity
+        # Don't limit to top N - show everything that might be relevant
+        # This ensures user's information is never excluded due to ranking
+        # Set min_display_similarity <= similarity_threshold to show all retrieved items
+        self.min_display_similarity = 0.0  # Show ALL retrieved items (no filtering by similarity for display)
+        self.max_display_items = 500  # Maximum items to display (very high to accommodate all retrieved items)
+        # Note: We'll show ALL items above min_display_similarity, up to max_display_items
+        # With min_display_similarity = 0.0, we show everything that was retrieved
     
     def _get_embedding_service(self):
         """Lazy initialization of embedding service"""
@@ -270,11 +275,28 @@ class RAGService:
         # Sort ALL items by similarity (highest first) - most relevant items naturally float to top
         all_items.sort(key=lambda x: x.get('similarity', 0), reverse=True)
         
-        # Take top N most relevant items regardless of source
-        top_items = all_items[:self.max_display_items]
+        # Filter by minimum similarity threshold, then take up to max_display_items
+        # This ensures we show ALL relevant items, not just top N
+        # Only filter out items with very low similarity (likely noise)
+        filtered_items = [
+            item for item in all_items 
+            if item.get('similarity', 0) >= self.min_display_similarity
+        ]
+        
+        # Take up to max_display_items (but prefer showing all filtered items)
+        # This ensures comprehensive coverage - if user's info is retrieved, it will be shown
+        top_items = filtered_items[:self.max_display_items]
         
         if not top_items:
-            return ""
+            # If no items meet the minimum similarity, show top items anyway (fallback)
+            # This prevents empty context when similarity scores are low
+            if all_items:
+                top_items = all_items[:min(50, len(all_items))]  # Show at least top 50 as fallback
+                print(f"⚠️ [RAG] No items above min_similarity ({self.min_display_similarity}), showing top {len(top_items)} items as fallback")
+            else:
+                return ""
+        
+        print(f"📊 [RAG] Displaying {len(top_items)} items (filtered from {len(all_items)} retrieved, min_similarity: {self.min_display_similarity})")
         
         # Group by source for display organization, but items are already sorted by similarity
         user_items = [item for item in top_items if item['source'] == 'user']
