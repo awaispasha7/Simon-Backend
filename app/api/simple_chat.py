@@ -13,7 +13,7 @@ import os
 from datetime import datetime, timezone
 import re
 
-from ..models import ChatRequest, DossierUpdate
+from ..models import ChatRequest
 from .simple_session_manager import SimpleSessionManager
 from ..database.supabase import get_supabase_client
 
@@ -21,7 +21,6 @@ from ..database.supabase import get_supabase_client
 try:
     from ..ai.models import ai_manager, TaskType
     from ..ai.rag_service import rag_service
-    from ..ai.dossier_extractor import dossier_extractor
     AI_AVAILABLE = True
 except Exception as e:
     print(f"Warning: AI components not available: {e}")
@@ -29,7 +28,6 @@ except Exception as e:
     ai_manager = None
     TaskType = None
     rag_service = None
-    dossier_extractor = None
 
 router = APIRouter()
 
@@ -100,36 +98,6 @@ async def _generate_conversation_transcript(conversation_history: List[Dict]) ->
 
 
 
-async def _send_completion_email(
-    user_email: Optional[str],
-    user_name: Optional[str],
-    project_id: str,
-    dossier_snapshot: Optional[dict],
-    generated_script: str
-) -> None:
-    """Send a completion email via existing EmailService (Resend-backed)."""
-    try:
-        from ..services.email_service import EmailService  # type: ignore
-        service = EmailService()
-        if not service.available:
-            print("⚠️ EmailService unavailable - skipping completion email")
-            return
-        if not user_email:
-            print("⚠️ Missing user_email - skipping completion email")
-            return
-        story_data = dossier_snapshot or {}
-        ok = await service.send_story_captured_email(
-            user_email=user_email,
-            user_name=user_name or "Writer",
-            story_data=story_data,
-            generated_script=generated_script or "",
-            project_id=project_id,
-            client_emails=None,
-        )
-        if ok:
-            print("📧 Completion email sent via EmailService")
-    except Exception as e:
-        print(f"⚠️ Failed to send completion email: {e}")
 
 @router.post("/chat")
 async def chat(
@@ -157,7 +125,6 @@ async def chat(
         
         session_id = session_info["session_id"]
         user_id = session_info["user_id"]
-        project_id = None  # Projects removed - no longer supported
         is_authenticated = session_info["is_authenticated"]
         
         print(f"Chat request - Session: {session_id}, User: {user_id}, Authenticated: {is_authenticated}")
@@ -355,21 +322,6 @@ async def chat(
             try:
                 # Generate AI response
                 if AI_AVAILABLE and ai_manager:
-                    # Get or create dossier for this project
-                    dossier_context = None
-                    if dossier_extractor and project_id:
-                        try:
-                            from ..database.session_service_supabase import session_service
-                            # Get existing dossier
-                            dossier = session_service.get_dossier(UUID(project_id), UUID(user_id))
-                            if dossier and dossier.snapshot_json:
-                                dossier_context = dossier.snapshot_json
-                                print(f"📋 Using existing dossier: {dossier.title}")
-                            else:
-                                print(f"📋 No existing dossier found for project {project_id}")
-                        except Exception as e:
-                            print(f"⚠️ Dossier retrieval error: {e}")
-                    
                     # Get RAG context from uploaded documents
                     # Projects no longer supported - search across all user documents
                     rag_context = None
@@ -412,16 +364,14 @@ async def chat(
                     if image_data_list:
                         print(f"🖼️ [PROMPT] Images included in single model call with full context")
                     
-                    # Use AI manager for response generation with RAG and dossier context
+                    # Use AI manager for response generation with RAG context
                     # SINGLE CALL: Images + conversation history + RAG context all together
                     ai_response = await ai_manager.generate_response(
                         task_type=TaskType.CHAT,
                         prompt=enhanced_prompt,
                         conversation_history=conversation_history,  # Full conversation history
                         user_id=user_id,
-                        project_id=project_id,
                         rag_context=rag_context,  # RAG context from documents
-                        dossier_context=dossier_context,
                         image_data=image_data_list,  # Images sent directly (ChatGPT-style)
                         enable_web_search=chat_request.enable_web_search
                     )
@@ -429,20 +379,16 @@ async def chat(
                     # Get the response content
                     full_response = ai_response.get("response", "I'm sorry, I couldn't generate a response.")
                     
-                    # Stream the response word by word for better UX
-                    words = full_response.split()
-                    chunk_count = 0
-                    
-                    for i, word in enumerate(words):
-                        chunk_count += 1
-                        chunk_data = {
-                            "type": "content",
-                            "content": word + (" " if i < len(words) - 1 else ""),
-                            "chunk": chunk_count,
-                            "done": i == len(words) - 1
-                        }
-                        yield f"data: {json.dumps(chunk_data)}\n\n"
-                        await asyncio.sleep(0.1)  # Small delay for streaming effect
+                    # Stream the complete response with formatting preserved
+                    # Frontend will handle word-by-word display
+                    chunk_data = {
+                        "type": "content",
+                        "content": full_response,
+                        "chunk": 1,
+                        "done": True,
+                        "stream_words": True  # Signal frontend to animate word-by-word
+                    }
+                    yield f"data: {json.dumps(chunk_data)}\n\n"
                     
                     # Save AI response
                     assistant_message_id = await _save_message(
@@ -463,133 +409,8 @@ async def chat(
                             attachment_metadata=attachment_metadata,
                             conversation_history=conversation_history,
                             rag_context=rag_context,
-                            project_id=project_id,
                             user_id=user_id
                         )
-                    
-                    # Update dossier if needed (after both user and assistant messages are saved)
-                    # IMPORTANT: re-fetch conversation history so it includes the assistant's reply we just saved
-                    # Fetch ALL messages for dossier (no limit to get complete conversation)
-                    updated_conversation_history = conversation_history
-                    try:
-                        updated_conversation_history = await _get_conversation_history(str(session_id), str(user_id), limit=None)
-                        print(f"📋 [DOSSIER CHECK] Conversation history length: {len(updated_conversation_history)}")
-                    except Exception as _history_e:
-                        print(f"⚠️ Failed to refresh conversation history before dossier update: {_history_e}")
-
-                    print(f"📋 [DOSSIER CHECK] Checking dossier update conditions:")
-                    print(f"   - dossier_extractor available: {dossier_extractor is not None}")
-                    print(f"   - project_id: {project_id}")
-                    print(f"   - conversation history length: {len(updated_conversation_history)}")
-                    print(f"   - All conditions met: {dossier_extractor and project_id and len(updated_conversation_history) >= 2}")
-
-                    if dossier_extractor and project_id and len(updated_conversation_history) >= 2:
-                        try:
-                            # Force update every 2 user turns (more reliable than LLM decision)
-                            user_turns = sum(1 for m in updated_conversation_history if m.get("role") == "user")
-                            should_update = user_turns >= 2 and user_turns % 2 == 0
-                            
-                            print(f"📋 [DOSSIER] User turns: {user_turns}, Should update: {should_update}")
-                            
-                            if should_update:
-                                print(f"📋 Updating dossier for project {project_id}")
-                                print(f"📋 [EXTRACT] Calling dossier_extractor.extract_metadata with {len(updated_conversation_history)} messages")
-                                print(f"📋 [EXTRACT] First 2 messages: {updated_conversation_history[:2] if len(updated_conversation_history) >= 2 else updated_conversation_history}")
-                                new_metadata = await dossier_extractor.extract_metadata(updated_conversation_history)
-                                print(f"📋 [EXTRACT] Extraction complete. Metadata keys: {list(new_metadata.keys())}")
-                                print(f"📋 [EXTRACT] Characters: {len(new_metadata.get('characters', []))}, Scenes: {len(new_metadata.get('scenes', []))}")
-
-                                # Fetch existing dossier FIRST to merge characters/scenes and preserve title
-                                existing_snapshot = {}
-                                current_title = None
-                                try:
-                                    from ..database.session_service_supabase import session_service
-                                    existing_dossier = session_service.get_dossier(UUID(project_id), UUID(user_id))
-                                    if existing_dossier:
-                                        existing_snapshot = existing_dossier.snapshot_json or {}
-                                        current_title = existing_snapshot.get("title")
-                                        print(f"📋 Fetched existing dossier: {current_title}")
-                                        print(f"📋 Existing characters: {len(existing_snapshot.get('characters', []))}")
-                                        print(f"📋 Existing scenes: {len(existing_snapshot.get('scenes', []))}")
-                                except Exception as _e:
-                                    print(f"⚠️ Could not fetch existing dossier: {_e}")
-
-                                # Merge characters by name (case-insensitive)
-                                try:
-                                    existing_chars = existing_snapshot.get("characters", []) or []
-                                    new_chars = new_metadata.get("characters", []) or []
-                                    if new_chars:
-                                        by_name = {}
-                                        for c in existing_chars:
-                                            key = (c.get("name") or "").strip().lower()
-                                            by_name[key] = c
-                                        for c in new_chars:
-                                            key = (c.get("name") or "").strip().lower()
-                                            if key in by_name:
-                                                merged = {**by_name[key], **{k: v for k, v in c.items() if v}}
-                                                by_name[key] = merged
-                                            else:
-                                                by_name[key] = c
-                                        new_metadata["characters"] = list(by_name.values())
-                                        print(f"📋 Merged characters: {len(new_metadata['characters'])}")
-                                    elif existing_chars:
-                                        new_metadata["characters"] = existing_chars
-                                        print(f"📋 Preserved existing characters: {len(existing_chars)}")
-                                except Exception as e:
-                                    print(f"⚠️ Character merge failed: {e}")
-
-                                # Merge scenes by one_liner
-                                try:
-                                    existing_scenes = existing_snapshot.get("scenes", []) or []
-                                    new_scenes = new_metadata.get("scenes", []) or []
-                                    if new_scenes:
-                                        by_line = {}
-                                        for s in existing_scenes:
-                                            key = (s.get("one_liner") or "").strip().lower()
-                                            by_line[key] = s
-                                        for s in new_scenes:
-                                            key = (s.get("one_liner") or "").strip().lower()
-                                            if key in by_line:
-                                                merged = {**by_line[key], **{k: v for k, v in s.items() if v}}
-                                                by_line[key] = merged
-                                            else:
-                                                by_line[key] = s
-                                        new_metadata["scenes"] = list(by_line.values())
-                                        print(f"📋 Merged scenes: {len(new_metadata['scenes'])}")
-                                    elif existing_scenes:
-                                        new_metadata["scenes"] = existing_scenes
-                                        print(f"📋 Preserved existing scenes: {len(existing_scenes)}")
-                                except Exception as e:
-                                    print(f"⚠️ Scene merge failed: {e}")
-
-                                # Preserve user-entered project title
-                                if current_title:
-                                    new_metadata["title"] = current_title
-                                    print(f"📋 Preserved project title: {current_title}")
-
-                                # Update dossier in database
-                                dossier_update = DossierUpdate(
-                                    snapshot_json=new_metadata
-                                )
-                                updated_dossier = session_service.update_dossier(
-                                    UUID(project_id),
-                                    UUID(user_id),
-                                    dossier_update
-                                )
-                                if updated_dossier:
-                                    print(f"✅ Dossier updated: {updated_dossier.title}")
-                                # Send updated dossier to the client for immediate refresh
-                                await send_event({
-                                    "type": "dossier_updated",
-                                    "project_id": str(project_id),
-                                    "dossier": new_metadata,
-                                    "conversation_history": updated_conversation_history
-                                })
-                            else:
-                                print(f"📋 Dossier update not needed for this turn (messages={len(updated_conversation_history)})")
-                        except Exception as e:
-                            print(f"⚠️ Failed to update dossier")
-                            print(f"Error details: {e}")
                     
                     # Store message embeddings for RAG
                     if rag_service and assistant_message_id:
@@ -636,79 +457,7 @@ async def chat(
                             print(f"🔍 [COMPLETION CHECK] Is complete: {is_complete}")
                         
                         if is_complete:
-                            print("✅ Story completion detected. Generating script and transcript for validation.")
-                            # fetch dossier snapshot if available
-                            dossier_snapshot = None
-                            try:
-                                if project_id:
-                                    from ..database.session_service_supabase import session_service
-                                    d = session_service.get_dossier(UUID(project_id), UUID(user_id))
-                                    dossier_snapshot = d.snapshot_json if d else None
-                            except Exception as _e:
-                                print(f"⚠️ Could not fetch dossier snapshot for email: {_e}")
-
-                            # Generate conversation transcript
-                            transcript = await _generate_conversation_transcript(updated_history_for_completion)
-                            print(f"📋 Generated conversation transcript ({len(transcript)} chars)")
-
-                            # Generate proper video script using AI
-                            generated_script = ""
-                            if ai_manager and dossier_snapshot:
-                                try:
-                                    print("🎬 Generating professional video script...")
-                                    script_response = await ai_manager.generate_response(
-                                        prompt="Generate script based on story data",
-                                        task_type=TaskType.SCRIPT,
-                                        dossier_context=dossier_snapshot
-                                    )
-                                    generated_script = script_response.get("response", "")
-                                    print(f"✅ Generated script ({len(generated_script)} chars)")
-                                except Exception as e:
-                                    print(f"⚠️ Script generation failed: {e}")
-                                    generated_script = f"Script generation failed. Chat response: {full_response}"
-                            else:
-                                print("⚠️ Using fallback - chat response as script")
-                                generated_script = full_response
-
-                            # try to get user email/name from users table if authenticated
-                            user_email = None
-                            user_name = None
-                            if is_authenticated:
-                                try:
-                                    supabase = get_supabase_client()
-                                    print(f"📧 [VALIDATION] Fetching user email for user_id: {user_id}")
-                                    # Fix: Use 'user_id' not 'id' - matches schema
-                                    res = supabase.table("users").select("email, display_name").eq("user_id", str(user_id)).limit(1).execute()
-                                    if res.data and len(res.data) > 0:
-                                        user_email = res.data[0].get("email")
-                                        user_name = res.data[0].get("display_name")
-                                        print(f"📧 [VALIDATION] Found user email: {user_email}, name: {user_name}")
-                                    else:
-                                        print(f"⚠️ [VALIDATION] No user found with user_id: {user_id}")
-                                except Exception as e:
-                                    print(f"❌ [VALIDATION] Error fetching user email: {e}")
-                                    pass
-                            
-                            # Check if we can deliver the story
-                            if not user_email:
-                                if not is_authenticated:
-                                    print("⚠️ Anonymous user - story will be validated but not delivered (no email available)")
-                                else:
-                                    print("⚠️ Authenticated user but no email found in database")
-                                user_email = None
-
-                            # Send completion email directly to user
-                            if user_email:
-                                try:
-                                    await _send_completion_email(user_email, user_name, str(project_id), dossier_snapshot, generated_script)
-                                    print("✅ [EMAIL] Successfully sent completion email to user")
-                                except Exception as email_error:
-                                    print(f"❌ [EMAIL] Failed to send completion email: {email_error}")
-                                    import traceback
-                                    print(f"❌ [EMAIL] Traceback: {traceback.format_exc()}")
-                            else:
-                                print("⚠️ [EMAIL] No user email available - skipping email notification")
-
+                            print("✅ Story completion detected - marking session inactive")
                             # mark session inactive
                             try:
                                 supabase = get_supabase_client()
@@ -806,7 +555,6 @@ async def _extract_and_store_attachment_analysis_from_response(
     attachment_metadata: Dict[str, Dict[str, str]],  # {filename: {"file_type": str, "asset_id": str}}
     conversation_history: List[Dict],
     rag_context: Optional[Dict],
-    project_id: str,
     user_id: str
 ):
     """
@@ -873,7 +621,6 @@ async def _extract_and_store_attachment_analysis_from_response(
                     new_asset_id = str(uuid4())
                     minimal_asset = {
                         "id": new_asset_id,
-                        "project_id": str(project_id) if project_id else None,
                         "media_type": "image",
                         "uri": filename,
                         "processing_status": "processed",

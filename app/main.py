@@ -11,7 +11,6 @@ AUTH_AVAILABLE = True
 chat = None
 transcribe = None
 auth = None
-dossier = None
 upload = None
 
 # Old chat router removed - using new simplified system
@@ -52,20 +51,6 @@ try:
 except Exception as e:
     print(f"ERROR: Error importing auth router: {e}")
     auth = None
-
-try:
-    from app.api import dossier
-    print("SUCCESS: Dossier router imported")
-except Exception as e:
-    print(f"ERROR: Error importing dossier router: {e}")
-    dossier = None
-
-try:
-    from app.api import projects
-    print("SUCCESS: Projects router imported")
-except Exception as e:
-    print(f"ERROR: Error importing projects router: {e}")
-    projects = None
 
 try:
     from app.api import upload
@@ -113,21 +98,6 @@ if transcribe:
         print("SUCCESS: Transcribe router included")
     except Exception as e:
         print(f"ERROR: Error including transcribe router: {e}")
-
-# Dossier and Projects routers removed - features no longer supported
-# if dossier:
-#     try:
-#         app.include_router(dossier.router, prefix="/api/v1", tags=["dossier"])
-#         print("SUCCESS: Dossier router included")
-#     except Exception as e:
-#         print(f"ERROR: Error including dossier router: {e}")
-
-# if projects:
-#     try:
-#         app.include_router(projects.router, prefix="/api/v1", tags=["projects"])
-#         print("SUCCESS: Projects router included")
-#     except Exception as e:
-#         print(f"ERROR: Error including projects router: {e}")
 
 if upload:
     try:
