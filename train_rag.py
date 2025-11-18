@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Simple RAG Training Script
 
@@ -12,6 +13,7 @@ Usage:
     python train_rag.py "your-file.docx"
     python train_rag.py "your-file.pdf" 
     python train_rag.py "your-file.txt"
+    python train_rag.py rag-training-data  # Train all files in directory
     python train_rag.py  # Interactive mode
 """
 
@@ -21,6 +23,12 @@ import os
 import sys
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+
+# Fix Windows console encoding
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # Add the app directory to the path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'app'))
@@ -346,12 +354,44 @@ class SimpleRAGTrainer:
             
             else:
                 print("❌ Invalid choice")
-
+    
+    async def train_directory(self, directory_path: str, knowledge_type: str = "global") -> Dict[str, bool]:
+        """Train RAG from all supported files in a directory"""
+        directory = Path(directory_path)
+        if not directory.exists() or not directory.is_dir():
+            raise Exception(f"Directory not found: {directory_path}")
+        
+        # Find all supported files
+        supported_extensions = ['.pdf', '.docx', '.txt', '.md']
+        files = []
+        for ext in supported_extensions:
+            files.extend(directory.glob(f'*{ext}'))
+        
+        if not files:
+            print(f"⚠️ No supported files found in {directory_path}")
+            return {}
+        
+        print(f"📁 Found {len(files)} files in {directory_path}")
+        print("=" * 60)
+        
+        results = {}
+        for i, file_path in enumerate(files, 1):
+            print(f"\n[{i}/{len(files)}] Processing: {file_path.name}")
+            print("-" * 60)
+            success = await self.train_from_file(str(file_path), knowledge_type)
+            results[str(file_path)] = success
+            
+            if success:
+                print(f"✅ {file_path.name} - Training completed!")
+            else:
+                print(f"❌ {file_path.name} - Training failed!")
+        
+        return results
 
 async def main():
     """Main function"""
     parser = argparse.ArgumentParser(description='Simple RAG Training Script')
-    parser.add_argument('file', nargs='?', help='File to train with (DOCX, PDF, TXT)')
+    parser.add_argument('file', nargs='?', help='File or directory to train with (DOCX, PDF, TXT)')
     parser.add_argument('--type', default='global', help='Knowledge type (global/user)')
     parser.add_argument('--interactive', action='store_true', help='Run in interactive mode')
     
@@ -378,22 +418,44 @@ async def main():
             # Interactive mode
             await trainer.interactive_mode()
         else:
-            # Train from file
-            if not os.path.exists(args.file):
-                print(f"❌ File not found: {args.file}")
+            # Check if it's a file or directory
+            path = Path(args.file)
+            if not path.exists():
+                print(f"❌ Path not found: {args.file}")
                 return
             
-            print(f"🚀 Training RAG with: {Path(args.file).name}")
-            success = await trainer.train_from_file(args.file, args.type)
-            
-            if success:
-                print("✅ RAG training completed successfully!")
-                await trainer.show_statistics()
+            if path.is_dir():
+                # Train all files in directory
+                print(f"🚀 Training RAG from directory: {path.name}")
+                print("=" * 60)
+                results = await trainer.train_directory(str(path), args.type)
+                
+                # Summary
+                print("\n" + "=" * 60)
+                print("📊 Training Summary:")
+                print("=" * 60)
+                successful = sum(1 for success in results.values() if success)
+                failed = len(results) - successful
+                print(f"✅ Successful: {successful}/{len(results)}")
+                print(f"❌ Failed: {failed}/{len(results)}")
+                
+                if successful > 0:
+                    await trainer.show_statistics()
             else:
-                print("❌ RAG training failed")
+                # Train from single file
+                print(f"🚀 Training RAG with: {path.name}")
+                success = await trainer.train_from_file(str(path), args.type)
+                
+                if success:
+                    print("✅ RAG training completed successfully!")
+                    await trainer.show_statistics()
+                else:
+                    print("❌ RAG training failed")
     
     except Exception as e:
         print(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
         print("\n💡 Make sure you have installed required dependencies:")
         print("   pip install python-docx PyPDF2")
 
