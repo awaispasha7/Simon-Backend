@@ -205,9 +205,10 @@ class AIModelManager:
                 combined_text = rag_context.get("combined_context_text", "").strip()
                 if combined_text:
                     rag_context_text = f"\n\n## RELEVANT CONTEXT FROM YOUR PREVIOUS CONVERSATIONS:\n{combined_text}\n"
-                    user_count = rag_context.get('user_context_count', 0)
-                    doc_count = rag_context.get('document_context_count', 0)
-                    global_count = rag_context.get('global_context_count', 0)
+                    # Get counts from actual lists (more reliable than metadata)
+                    user_count = len(rag_context.get('user_context', []))
+                    doc_count = len(rag_context.get('document_context', []))
+                    global_count = len(rag_context.get('global_context', []))
                     print(f"📚 Including RAG context: {user_count} user messages, {doc_count} document chunks, {global_count} global patterns")
                     print(f"📚 RAG context text length: {len(combined_text)} chars")
                 else:

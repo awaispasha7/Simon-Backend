@@ -315,7 +315,11 @@ async def chat(
                                 user_id=rag_user_id,
                                 conversation_history=conversation_history
                             )
-                            print(f"📚 RAG context retrieved: {rag_context.get('user_context_count', 0)} user messages, {rag_context.get('document_context_count', 0)} document chunks")
+                            # Get counts from actual lists (more reliable than metadata)
+                            user_count = len(rag_context.get('user_context', []))
+                            doc_count = len(rag_context.get('document_context', []))
+                            global_count = len(rag_context.get('global_context', []))
+                            print(f"📚 RAG context retrieved: {user_count} user messages, {doc_count} document chunks, {global_count} global patterns")
                         except Exception as e:
                             print(f"⚠️ RAG context error: {e}")
                             rag_context = None
