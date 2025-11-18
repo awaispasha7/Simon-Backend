@@ -20,14 +20,15 @@ class RAGService:
         # Configuration for retrieval
         # Always query from ALL sources - let similarity search determine relevance
         # Higher match counts ensure we don't miss relevant information
-        self.user_match_count = 20  # Retrieve from user messages
-        self.global_match_count = 20  # Retrieve from global knowledge (training data, "About Me", etc.)
-        self.document_match_count = 15  # Retrieve from user-uploaded documents
+        # Increased counts to capture personal info even with lower similarity scores
+        self.user_match_count = 30  # Retrieve from user messages
+        self.global_match_count = 50  # Retrieve from global knowledge (training data, "About Me", etc.) - increased to capture personal info
+        self.document_match_count = 20  # Retrieve from user-uploaded documents
         self.similarity_threshold = 0.05  # Broader net to avoid misses
         
         # Display limits (to avoid token bloat, but we retrieve more to have options)
         # The most relevant items (by similarity) will naturally float to the top
-        self.max_display_items = 30  # Total items to show in prompt (most relevant from all sources)
+        self.max_display_items = 40  # Total items to show in prompt (most relevant from all sources) - increased to include more personal info
     
     def _get_embedding_service(self):
         """Lazy initialization of embedding service"""
@@ -60,6 +61,13 @@ class RAGService:
             print(f"RAG: Building context for user {user_id}")
             
             # Step 1: Generate query embedding (include conversation context if available)
+            # Enhance query for personal information queries to improve retrieval
+            user_message_lower = user_message.lower()
+            is_personal_query = any(phrase in user_message_lower for phrase in [
+                "do you know about me", "tell me about myself", "who am i", "about me",
+                "what do you know", "my information", "personal information"
+            ])
+            
             if conversation_history:
                 # Combine recent conversation for better context
                 recent_context = "\n".join([
@@ -69,6 +77,11 @@ class RAGService:
                 query_text = f"{recent_context}\nUser: {user_message}"
             else:
                 query_text = user_message
+            
+            # Enhance query for personal information to improve semantic matching
+            if is_personal_query:
+                # Add context keywords that would match personal info content
+                query_text = f"{query_text} personal information about the user coaching health fitness weight loss liposuction"
             
             query_embedding = await self._get_embedding_service().generate_query_embedding(query_text)
             
