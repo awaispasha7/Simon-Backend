@@ -239,19 +239,33 @@ class RAGService:
                     'metadata': item
                 })
         
-        # Add global knowledge items
+        # Add global knowledge items (but filter out personal info since it's in system prompt)
         for item in global_context:
             example = item.get('example_text', '') or item.get('description', '') or ''
             if example.strip():
-                all_items.append({
-                    'source': 'global',
-                    'similarity': item.get('similarity', 0),
-                    'content': example,
-                    'category': item.get('category', 'general'),
-                    'pattern_type': item.get('pattern_type', 'unknown'),
-                    'tags': item.get('tags', []),
-                    'metadata': item
-                })
+                # Skip personal info chunks - they're already in the system prompt
+                tags = item.get('tags', [])
+                example_lower = example.lower()
+                is_personal_info = (
+                    any('personal' in str(tag).lower() for tag in tags) or
+                    any('about me' in str(tag).lower() for tag in tags) or
+                    'simon boberg' in example_lower or
+                    'simon@simonbobergcoaching.com' in example_lower or
+                    ('coaching' in example_lower and 'liposuction' in example_lower and len(example) > 500)  # Long coaching content
+                )
+                
+                if not is_personal_info:
+                    all_items.append({
+                        'source': 'global',
+                        'similarity': item.get('similarity', 0),
+                        'content': example,
+                        'category': item.get('category', 'general'),
+                        'pattern_type': item.get('pattern_type', 'unknown'),
+                        'tags': item.get('tags', []),
+                        'metadata': item
+                    })
+                else:
+                    print(f"🔍 [RAG] Filtered out personal info chunk (already in system prompt): {item.get('tags', [])}")
         
         # Sort ALL items by similarity (highest first) - most relevant items naturally float to top
         all_items.sort(key=lambda x: x.get('similarity', 0), reverse=True)
