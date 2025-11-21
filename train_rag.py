@@ -191,22 +191,40 @@ class SimpleRAGTrainer:
             # Generate embedding
             embedding = await self.embedding_service.generate_embedding(content)
             
-            # Extract category from source filename
+            # Extract category & pattern_type from source filename
             source_name = Path(source).stem
+            lower_name = source_name.lower()
+
             category = "general"
-            if "story" in source_name.lower():
+            pattern_type = "knowledge_chunk"
+
+            # Custom mapping for your content files
+            if "hook" in lower_name:
+                category = "hooks"
+                pattern_type = "hook_pattern"
+            elif "structure" in lower_name:
+                category = "script_structure"
+                pattern_type = "structure_pattern"
+            elif "topic" in lower_name:
+                category = "topic_knowledge"
+                pattern_type = "topic_pattern"
+            elif "voice" in lower_name:
+                category = "creator_voice"
+                pattern_type = "voice_profile"
+            # Legacy mappings for older storytelling files
+            elif "story" in lower_name:
                 category = "storytelling"
-            elif "character" in source_name.lower():
+            elif "character" in lower_name:
                 category = "character"
-            elif "plot" in source_name.lower():
+            elif "plot" in lower_name:
                 category = "plot"
-            elif "dialogue" in source_name.lower():
+            elif "dialogue" in lower_name:
                 category = "dialogue"
-            
+
             # Store in vector database using existing function
             result = await self.vector_storage.store_global_knowledge(
                 category=category,
-                pattern_type="knowledge_chunk",
+                pattern_type=pattern_type,
                 embedding=embedding,
                 example_text=content,
                 description=f"Knowledge chunk from {source_name}",
